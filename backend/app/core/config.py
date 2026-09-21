@@ -1,0 +1,40 @@
+"""App configuration - validated via Pydantic. No secrets in git."""
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    env: str = "development"
+    api_v1_prefix: str = "/api/v1"
+    cors_origins: list[str] = ["http://localhost:5173"]
+    supabase_url: str = ""
+    supabase_anon_key: str = ""
+    supabase_service_role_key: str = ""
+    database_url: str = ""
+    # App-specific signing only. Never used for Supabase Auth verification.
+    jwt_secret: str = "change-me"
+    log_level: str = "INFO"
+    jwks_cache_ttl_seconds: int = 600
+    jwks_timeout_seconds: float = 5.0
+    # Resolved user-context (profile/org/stores) cache. Short: only skips
+    # repeated auth lookups; JWT itself is verified on every request.
+    user_context_ttl_seconds: int = 45
+
+    @property
+    def is_dev(self) -> bool:
+        return self.env == "development"
+
+    @property
+    def jwks_url(self) -> str:
+        return f"{self.supabase_url.rstrip('/')}/auth/v1/.well-known/jwks.json"
+
+    def check_supabase(self) -> None:
+        if not self.supabase_url or not self.supabase_anon_key:
+            raise RuntimeError(
+                "SUPABASE_URL / SUPABASE_ANON_KEY missing. "
+                "Copy backend/.env.example to backend/.env"
+            )
+
+
+settings = Settings()

@@ -1,0 +1,5 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Mobile-first POS defaults. Keep POS interactions fast and touch-friendly. */
