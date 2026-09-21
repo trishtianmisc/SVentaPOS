@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api-client';
-import { Badge, Button, PageHeader, Section, Select, Table } from '../components/ui';
+import { Badge, Button, EmptyState, PageHeader, Section, Select, Spinner, Table, toast } from '../components/ui';
 
 export default function AdminPage() {
   const [orgs, setOrgs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [plans, setPlans] = useState<any[]>([]);
   const [sel, setSel] = useState<Record<string, string>>({});
   const [msg, setMsg] = useState('');
@@ -19,10 +20,12 @@ export default function AdminPage() {
   };
 
   useEffect(() => {
-    load().catch((e) => {
-      if (e.response?.status === 403) setDenied(true);
-      else setMsg(e.response?.data?.error?.message ?? 'Load failed');
-    });
+    load()
+      .catch((e) => {
+        if (e.response?.status === 403) setDenied(true);
+        else setMsg(e.response?.data?.error?.message ?? 'Load failed');
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   const setPlan = async (orgId: string) => {
@@ -31,6 +34,7 @@ export default function AdminPage() {
     setMsg('');
     try {
       await api.post(`/admin/organizations/${orgId}/subscription`, { plan });
+      toast('success', `Plan set to ${plan}`);
       await load();
     } catch (e: any) {
       setMsg(e.response?.data?.error?.message ?? 'Update failed');
@@ -53,6 +57,11 @@ export default function AdminPage() {
       <PageHeader title="Admin" sub="Organizations, plans, and usage" />
       {msg && <p className="mb-4 text-[13px] text-red-600">{msg}</p>}
       <Section title="Organizations">
+        {loading ? (
+          <Spinner label="Loading organizations…" />
+        ) : orgs.length === 0 ? (
+          <EmptyState title="No organizations found" />
+        ) : (
         <Table head={['Organization', 'Plan', 'Usage', '']}>
           {orgs.map((o: any) => (
             <tr key={o.organization.id}>
@@ -96,8 +105,6 @@ export default function AdminPage() {
             </tr>
           ))}
         </Table>
-        {orgs.length === 0 && (
-          <p className="py-2 text-sm text-gray-400">No organizations found.</p>
         )}
       </Section>
     </div>

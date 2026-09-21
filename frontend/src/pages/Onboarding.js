@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api-client';
 import { useSessionStore } from '../stores/session';
-import { Button, Field, Section, TextInput } from '../components/ui';
+import { Button, Field, AuthShell, TextInput } from '../components/ui';
 export default function OnboardingPage() {
     const [shop, setShop] = useState('');
     const [store, setStore] = useState('Main Store');
@@ -49,5 +49,5 @@ export default function OnboardingPage() {
     };
     if (checking)
         return _jsx("div", { className: "p-6", children: "Loading\u2026" });
-    return (_jsx("div", { className: "flex min-h-dvh items-center justify-center bg-gray-50 p-4", children: _jsxs("div", { className: "w-full max-w-sm", children: [_jsx("h1", { className: "text-xl font-semibold md:text-2xl", children: "Set up your business" }), _jsx("p", { className: "mt-1 text-[13px] text-gray-500", children: "One step \u2014 your shop, first store, and owner access are created together." }), _jsxs(Section, { title: "Business details", children: [_jsxs("div", { className: "grid gap-3", children: [_jsx(Field, { label: "Business name", hint: "e.g. Aling Nena's Sari-Sari Store", children: _jsx(TextInput, { value: shop, onChange: (e) => setShop(e.target.value) }) }), _jsx(Field, { label: "First store", hint: "e.g. Main Store", children: _jsx(TextInput, { value: store, onChange: (e) => setStore(e.target.value) }) }), _jsx(Button, { size: "large", className: "w-full", disabled: busy, onClick: submit, children: busy ? 'Creating…' : 'Create my store' })] }), msg && _jsx("p", { className: "mt-3 text-[13px] text-red-600", children: msg })] })] }) }));
+    return (_jsxs(AuthShell, { title: "Set up your business", sub: "One step \u2014 your shop, first store, and owner access are created together.", children: [_jsxs("div", { className: "grid gap-3", children: [_jsx(Field, { label: "Business name", hint: "e.g. Aling Nena's Sari-Sari Store", children: _jsx(TextInput, { value: shop, onChange: (e) => setShop(e.target.value) }) }), _jsx(Field, { label: "First store", hint: "e.g. Main Store", children: _jsx(TextInput, { value: store, onChange: (e) => setStore(e.target.value) }) }), _jsx(Button, { size: "large", className: "w-full", disabled: busy, onClick: submit, children: busy ? 'Creating…' : 'Create my store' })] }), msg && _jsx("p", { className: "mt-3 text-[13px] text-red-600", children: msg })] }));
 }

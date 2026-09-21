@@ -1,24 +1,30 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase-client';
 import { api } from '../lib/api-client';
 import { useSessionStore } from '../stores/session';
-import { Button, Field, TextInput } from '../components/ui';
+import { queryClient } from '../app/queryClient';
+import { AuthShell, Button, Field, TextInput, toast } from '../components/ui';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [msg, setMsg] = useState('');
+  const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
 
   const login = async () => {
     setMsg('');
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      setMsg(error.message);
-      return;
-    }
+    setBusy(true);
     try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        setMsg(error.message);
+        return;
+      }
+      // Fresh session: drop any rows cached under a previous account before
+      // fetching context, so they can never flash on screen.
+      queryClient.clear();
       const res = await api.get('/auth/me');
       const orgId = res.data.data.organization_id;
       if (orgId) localStorage.setItem('ventapos:orgId', orgId);
@@ -48,51 +54,46 @@ export default function LoginPage() {
         setMsg('Logged in — no store assigned yet. Ask an owner to add you.');
         return;
       }
+      toast('success', 'Signed in');
       navigate('/pos', { replace: true });
     } catch {
       setMsg('Logged in (context pending)');
+    } finally {
+      setBusy(false);
     }
   };
 
-  useEffect(() => {
-    document.title = 'Login — VentaPOS';
-  }, []);
-
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-gray-50 p-4">
-      <div className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-        <h1 className="text-xl font-semibold text-teal-800">VentaPOS</h1>
-        <p className="mt-1 text-[13px] text-gray-500">Sign in to your store</p>
-        <div className="mt-4 grid gap-3">
-          <Field label="Email">
-            <TextInput
-              type="email"
-              autoComplete="username"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </Field>
-          <Field label="Password">
-            <TextInput
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && login()}
-            />
-          </Field>
-          <Button size="large" className="w-full" onClick={login}>
-            Sign in
-          </Button>
-        </div>
-        {msg && <p className="mt-3 text-[13px]">{msg}</p>}
-        <p className="mt-4 text-center text-[13px] text-gray-500">
-          New here?{' '}
-          <Link to="/register" className="font-medium text-teal-700">
-            Create an account
-          </Link>
-        </p>
+    <AuthShell title="Sign in" sub="Sign in to your store">
+      <div className="grid gap-3">
+        <Field label="Email">
+          <TextInput
+            type="email"
+            autoComplete="username"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </Field>
+        <Field label="Password">
+          <TextInput
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && login()}
+          />
+        </Field>
+        <Button size="large" className="w-full" disabled={busy} onClick={login}>
+          {busy ? 'Signing in…' : 'Sign in'}
+        </Button>
       </div>
-    </div>
+      {msg && <p className="mt-3 text-[13px]">{msg}</p>}
+      <p className="mt-4 text-center text-[13px] text-gray-500">
+        New here?{' '}
+        <Link to="/register" className="font-medium text-primary">
+          Create an account
+        </Link>
+      </p>
+    </AuthShell>
   );
 }

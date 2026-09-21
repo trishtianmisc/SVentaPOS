@@ -2,6 +2,31 @@
 @tailwind components;
 @tailwind utilities;
 
+/* VentaPOS design tokens. Unique indigo-forward identity; the bulk of the
+   UI stays neutral (white/slate surfaces, charcoal text). Brand color is
+   used strategically: active nav, primary actions, selected filters,
+   focus states. */
+:root {
+  --color-primary: 79 70 229; /* indigo, primary actions */
+  --color-primary-hover: 67 56 202; /* primary hover/pressed */
+  --color-primary-soft: 238 242 255; /* selected fills, active nav wash */
+  --color-primary-ink: 55 48 163; /* brand text on light surfaces */
+
+  --color-background: 248 250 252; /* slate-50 page background */
+  --color-surface: 255 255 255; /* cards, panels */
+  --color-border: 226 232 240; /* slate-200 borders */
+
+  --color-text: 17 24 39; /* gray-900 body text */
+  --color-text-secondary: 100 116 139; /* slate-500 helper text */
+
+  --color-success: 4 120 87; /* emerald-700 text/icons */
+  --color-success-soft: 209 250 229; /* emerald-100 wash */
+  --color-warning: 146 64 14; /* amber-800 text */
+  --color-warning-soft: 254 243 199; /* amber-100 wash */
+  --color-error: 185 28 28; /* red-700, destructive only */
+  --color-error-soft: 254 226 226; /* red-100 wash */
+}
+
 /* Mobile-first POS defaults. Keep POS interactions fast and touch-friendly. */
 
 /* 80mm thermal receipt. App chrome already hides via print:hidden. */

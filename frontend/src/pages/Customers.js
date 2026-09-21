@@ -1,23 +1,39 @@
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api-client';
 import { formatPHP } from '../utils/currency';
+import { Badge, Button, EmptyState, Field, ListFooter, Modal, PageHeader, SearchInput, Section, Select, Spinner, Table, TextInput, toast, } from '../components/ui';
+const PAY_METHODS = ['cash', 'gcash', 'maya', 'card', 'bank', 'other'];
 export default function CustomersPage() {
     const [items, setItems] = useState([]);
+    const [loading, setLoading] = useState(true);
     const [name, setName] = useState('');
     const [phone, setPhone] = useState('');
     const [limit, setLimit] = useState('');
     const [detail, setDetail] = useState(null);
     const [ledger, setLedger] = useState([]);
     const [payAmt, setPayAmt] = useState('');
+    const [payMethod, setPayMethod] = useState('cash');
     const [msg, setMsg] = useState('');
-    const load = async () => {
-        const res = await api.get('/customers');
+    const [search, setSearch] = useState('');
+    const [editing, setEditing] = useState(null);
+    const [editPhone, setEditPhone] = useState('');
+    const [editLimit, setEditLimit] = useState('');
+    const load = async (q = '') => {
+        const res = await api.get('/customers', { params: q ? { search: q } : {} });
         setItems(res.data.data);
     };
     useEffect(() => {
-        load().catch((e) => setMsg(e.response?.data?.error?.message ?? 'Load failed'));
+        load()
+            .catch((e) => setMsg(e.response?.data?.error?.message ?? 'Load failed'))
+            .finally(() => setLoading(false));
     }, []);
+    useEffect(() => {
+        const t = setTimeout(() => {
+            load(search).catch(() => undefined);
+        }, 300);
+        return () => clearTimeout(t);
+    }, [search]);
     const create = async () => {
         setMsg('');
         try {
@@ -29,20 +45,27 @@ export default function CustomersPage() {
             setName('');
             setPhone('');
             setLimit('');
-            await load();
+            toast('success', 'Customer added');
+            await load(search);
         }
         catch (e) {
             setMsg(e.response?.data?.error?.message ?? 'Create failed');
         }
     };
     const open = async (id) => {
-        const [d, l] = await Promise.all([
-            api.get(`/customers/${id}`),
-            api.get(`/customers/${id}/ledger`),
-        ]);
-        setDetail(d.data.data);
-        setLedger(l.data.data);
-        setPayAmt('');
+        setMsg('');
+        try {
+            const [d, l] = await Promise.all([
+                api.get(`/customers/${id}`),
+                api.get(`/customers/${id}/ledger`),
+            ]);
+            setDetail(d.data.data);
+            setLedger(l.data.data);
+            setPayAmt('');
+        }
+        catch (e) {
+            setMsg(e.response?.data?.error?.message ?? 'Could not open customer');
+        }
     };
     const pay = async () => {
         if (!detail)
@@ -51,14 +74,39 @@ export default function CustomersPage() {
         try {
             await api.post(`/customers/${detail.id}/payment`, {
                 amount: Number(payAmt),
-                method: 'cash',
+                method: payMethod,
             });
+            toast('success', 'Payment recorded');
             await open(detail.id);
-            await load();
+            await load(search);
         }
         catch (e) {
             setMsg(e.response?.data?.error?.message ?? 'Payment failed');
         }
     };
-    return (_jsxs("div", { className: "w-full p-4 md:p-6", children: [_jsx("h1", { className: "text-xl font-semibold md:text-2xl", children: "Customers & Utang" }), msg && _jsx("p", { className: "mt-2 text-sm text-red-600", children: msg }), _jsxs("div", { className: "mt-4 grid gap-4 lg:grid-cols-[320px_1fr_1fr]", children: [_jsxs("section", { className: "h-fit rounded-xl border bg-white p-4", children: [_jsx("h2", { className: "text-sm font-semibold text-gray-700", children: "Add customer" }), _jsxs("div", { className: "mt-2 grid gap-2", children: [_jsx("input", { className: "rounded-lg border p-2", placeholder: "Name", value: name, onChange: (e) => setName(e.target.value) }), _jsx("input", { className: "rounded-lg border p-2", placeholder: "Phone (optional)", value: phone, onChange: (e) => setPhone(e.target.value) }), _jsx("input", { className: "rounded-lg border p-2", placeholder: "Credit limit (optional)", value: limit, onChange: (e) => setLimit(e.target.value), inputMode: "decimal" }), _jsx("button", { className: "rounded-lg bg-teal-700 p-2 text-white", onClick: create, children: "Add" })] })] }), _jsxs("section", { className: "rounded-xl border bg-white p-4", children: [_jsx("h2", { className: "text-sm font-semibold text-gray-700", children: "Balances" }), _jsxs("ul", { className: "mt-2 divide-y", children: [items.map((c) => (_jsx("li", { children: _jsxs("button", { className: "flex w-full justify-between py-2 text-left", onClick: () => open(c.id), children: [_jsxs("span", { children: [_jsx("span", { className: "font-medium", children: c.name }), c.credit_limit != null && (_jsxs("span", { className: "ml-2 text-xs text-gray-400", children: ["limit ", formatPHP(c.credit_limit)] }))] }), _jsx("span", { className: c.balance > 0 ? 'font-bold text-amber-700' : '', children: formatPHP(c.balance) })] }) }, c.id))), items.length === 0 && _jsx("li", { className: "py-2 text-sm text-gray-400", children: "No customers yet." })] })] }), _jsx("section", { className: "h-fit rounded-xl border bg-white p-4", children: detail ? (_jsxs(_Fragment, { children: [_jsx("p", { className: "font-bold", children: detail.name }), _jsxs("p", { className: "text-sm", children: ["Outstanding: ", _jsx("span", { className: "font-bold", children: formatPHP(detail.balance) })] }), _jsxs("div", { className: "mt-2 flex gap-2", children: [_jsx("input", { className: "flex-1 rounded-lg border p-2", placeholder: "Payment amount", value: payAmt, onChange: (e) => setPayAmt(e.target.value), inputMode: "decimal" }), _jsx("button", { className: "rounded-lg bg-teal-700 px-3 text-white", onClick: pay, children: "Record" })] }), _jsx("ul", { className: "mt-3 divide-y text-sm", children: ledger.map((e) => (_jsxs("li", { className: "flex justify-between py-1", children: [_jsx("span", { children: e.transaction_type }), _jsx("span", { children: formatPHP(e.amount) })] }, e.id))) })] })) : (_jsx("p", { className: "text-sm text-gray-400", children: "Select a customer for ledger + payments." })) })] })] }));
+    const openEdit = (c) => {
+        setEditing(c);
+        setEditPhone(c.phone ?? '');
+        setEditLimit(c.credit_limit != null ? String(c.credit_limit) : '');
+    };
+    const saveEdit = async () => {
+        if (!editing)
+            return;
+        setMsg('');
+        try {
+            await api.put(`/customers/${editing.id}`, {
+                phone: editPhone || undefined,
+                credit_limit: editLimit === '' ? null : Number(editLimit),
+            });
+            setEditing(null);
+            toast('success', 'Customer updated');
+            await open(editing.id);
+            await load(search);
+        }
+        catch (e) {
+            setMsg(e.response?.data?.error?.message ?? 'Update failed');
+        }
+    };
+    const visible = useMemo(() => items, [items]);
+    return (_jsxs("div", { className: "w-full p-4 md:p-6", children: [_jsx(PageHeader, { title: "Customers & Utang", sub: "Balances, ledger, and payments" }), msg && _jsx("p", { className: "mb-4 text-[13px] text-red-600", children: msg }), _jsxs("div", { className: "grid gap-4 xl:grid-cols-[300px_1fr_1fr]", children: [_jsx(Section, { title: "Add customer", children: _jsxs("div", { className: "grid gap-3", children: [_jsx(Field, { label: "Name", children: _jsx(TextInput, { value: name, onChange: (e) => setName(e.target.value) }) }), _jsx(Field, { label: "Phone", hint: "Optional.", children: _jsx(TextInput, { value: phone, onChange: (e) => setPhone(e.target.value) }) }), _jsx(Field, { label: "Credit limit (\u20B1)", hint: "Optional. Empty means no limit.", children: _jsx(TextInput, { value: limit, onChange: (e) => setLimit(e.target.value), inputMode: "decimal" }) }), _jsx(Button, { disabled: !name.trim(), onClick: create, children: "Add customer" })] }) }), _jsx(Section, { title: "Balances", action: _jsx("div", { className: "w-48", children: _jsx(SearchInput, { label: "Search customers", placeholder: "Search name", value: search, onChange: setSearch }) }), children: loading ? (_jsx(Spinner, { label: "Loading customers\u2026" })) : visible.length === 0 ? (_jsx(EmptyState, { title: search ? 'No customers match' : 'No customers yet', hint: search ? 'Try a different search.' : 'Add your first customer on the left.' })) : (_jsxs(_Fragment, { children: [_jsx(Table, { head: ['Customer', 'Balance', ''], children: visible.map((c) => (_jsxs("tr", { className: detail?.id === c.id ? 'bg-primary-soft/50' : '', children: [_jsxs("td", { className: "px-3 py-2 first:pl-0", children: [_jsx("button", { className: "text-left font-medium text-primary", onClick: () => open(c.id), children: c.name }), _jsxs("p", { className: "text-xs text-gray-400", children: [c.phone ?? 'No phone', c.credit_limit != null && ` · limit ${formatPHP(c.credit_limit)}`] })] }), _jsx("td", { className: "px-3 py-2 text-right", children: c.balance > 0 ? (_jsx(Badge, { tone: "amber", children: formatPHP(c.balance) })) : (_jsx("span", { className: "text-gray-400", children: formatPHP(0) })) }), _jsx("td", { className: "px-3 py-2 text-right last:pr-0", children: _jsx(Button, { size: "compact", variant: "secondary", onClick: () => openEdit(c), children: "Edit" }) })] }, c.id))) }), _jsx(ListFooter, { count: visible.length, noun: "customer" })] })) }), _jsx(Section, { title: detail ? detail.name : 'Ledger', children: detail ? (_jsxs(_Fragment, { children: [_jsxs("p", { className: "text-sm", children: ["Outstanding: ", _jsx("span", { className: "font-semibold", children: formatPHP(detail.balance) })] }), _jsxs("div", { className: "mt-3 grid gap-3", children: [_jsx(Field, { label: "Payment amount (\u20B1)", children: _jsx(TextInput, { value: payAmt, onChange: (e) => setPayAmt(e.target.value), inputMode: "decimal" }) }), _jsx(Field, { label: "Method", children: _jsx(Select, { value: payMethod, onChange: (e) => setPayMethod(e.target.value), children: PAY_METHODS.map((m) => (_jsx("option", { value: m, className: "capitalize", children: m }, m))) }) }), _jsx(Button, { disabled: !payAmt || Number(payAmt) <= 0, onClick: pay, children: "Record payment" })] }), _jsx(Table, { head: ['Type', 'Amount'], children: ledger.map((e) => (_jsxs("tr", { children: [_jsx("td", { className: "px-3 py-2 first:pl-0 text-[13px]", children: e.transaction_type }), _jsx("td", { className: `px-3 py-2 text-right last:pr-0 ${Number(e.amount) < 0 ? 'text-green-700' : ''}`, children: formatPHP(e.amount) })] }, e.id))) })] })) : (_jsx(EmptyState, { title: "No customer selected", hint: "Pick a customer for ledger and payments." })) })] }), editing && (_jsx(Modal, { title: `Edit ${editing.name}`, onClose: () => setEditing(null), children: _jsxs("div", { className: "grid gap-3", children: [_jsx(Field, { label: "Phone", children: _jsx(TextInput, { value: editPhone, onChange: (e) => setEditPhone(e.target.value) }) }), _jsx(Field, { label: "Credit limit (\u20B1)", hint: "Leave as-is to keep the current limit.", children: _jsx(TextInput, { value: editLimit, onChange: (e) => setEditLimit(e.target.value), inputMode: "decimal" }) }), _jsx(Button, { onClick: saveEdit, children: "Save changes" })] }) }))] }));
 }

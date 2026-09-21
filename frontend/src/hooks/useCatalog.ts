@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api-client';
 import { qk } from '../lib/query-keys';
+import { useAuthStore } from '../stores/auth-store';
 import { useSessionStore } from '../stores/session';
 
 export interface Product {
@@ -47,18 +48,24 @@ const list = (path: string) => api.get(path).then((r) => r.data.data ?? []);
  *               authoritative; UI balances are display-only).
  */
 export function useProducts() {
+  // Account-scoped key: two logins on one device can never read each
+  // other's cache, even if a transition clear were ever missed.
+  const userId = useAuthStore((s) => s.userId);
   return useQuery<Product[]>({
-    queryKey: qk.products,
+    queryKey: [...qk.products, userId ?? 'anon'],
     queryFn: () => list('/products'),
     staleTime: 5 * 60_000,
+    enabled: !!userId,
   });
 }
 
 export function useCategories() {
+  const userId = useAuthStore((s) => s.userId);
   return useQuery<Category[]>({
-    queryKey: qk.categories,
+    queryKey: [...qk.categories, userId ?? 'anon'],
     queryFn: () => list('/categories'),
     staleTime: 10 * 60_000,
+    enabled: !!userId,
   });
 }
 
@@ -74,10 +81,12 @@ export function useInventory() {
 }
 
 export function useCustomers() {
+  const userId = useAuthStore((s) => s.userId);
   return useQuery<Customer[]>({
-    queryKey: qk.customers,
+    queryKey: [...qk.customers, userId ?? 'anon'],
     queryFn: () => list('/customers'),
     staleTime: 2 * 60_000,
+    enabled: !!userId,
   });
 }
 

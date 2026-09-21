@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api-client';
 import { useSessionStore } from '../stores/session';
-import { Button, Field, Section, TextInput } from '../components/ui';
+import { Button, Field, AuthShell, TextInput } from '../components/ui';
 
 export default function OnboardingPage() {
   const [shop, setShop] = useState('');
@@ -49,32 +49,27 @@ export default function OnboardingPage() {
   if (checking) return <div className="p-6">Loading…</div>;
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-gray-50 p-4">
-      <div className="w-full max-w-sm">
-        <h1 className="text-xl font-semibold md:text-2xl">Set up your business</h1>
-        <p className="mt-1 text-[13px] text-gray-500">
-          One step — your shop, first store, and owner access are created together.
-        </p>
-        <Section title="Business details">
-          <div className="grid gap-3">
-            <Field label="Business name" hint="e.g. Aling Nena's Sari-Sari Store">
-              <TextInput value={shop} onChange={(e) => setShop(e.target.value)} />
-            </Field>
-            <Field label="First store" hint="e.g. Main Store">
-              <TextInput value={store} onChange={(e) => setStore(e.target.value)} />
-            </Field>
-            <Button
-              size="large"
-              className="w-full"
-              disabled={busy}
-              onClick={submit}
-            >
-              {busy ? 'Creating…' : 'Create my store'}
-            </Button>
-          </div>
-          {msg && <p className="mt-3 text-[13px] text-red-600">{msg}</p>}
-        </Section>
+    <AuthShell
+      title="Set up your business"
+      sub="One step — your shop, first store, and owner access are created together."
+    >
+      <div className="grid gap-3">
+        <Field label="Business name" hint="e.g. Aling Nena's Sari-Sari Store">
+          <TextInput value={shop} onChange={(e) => setShop(e.target.value)} />
+        </Field>
+        <Field label="First store" hint="e.g. Main Store">
+          <TextInput value={store} onChange={(e) => setStore(e.target.value)} />
+        </Field>
+        <Button
+          size="large"
+          className="w-full"
+          disabled={busy}
+          onClick={submit}
+        >
+          {busy ? 'Creating…' : 'Create my store'}
+        </Button>
       </div>
-    </div>
+      {msg && <p className="mt-3 text-[13px] text-red-600">{msg}</p>}
+    </AuthShell>
   );
 }

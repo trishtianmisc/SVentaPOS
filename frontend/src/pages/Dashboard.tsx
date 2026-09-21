@@ -125,9 +125,22 @@ export default function DashboardPage() {
           <Section title={`Notifications (${notifs.length})`}>
             <ul className="space-y-2">
               {notifs.slice(0, 5).map((n: any) => (
-                <li key={n.id} className="text-[13px]">
-                  <p className="font-medium">{n.title}</p>
-                  {n.body && <p className="text-gray-500">{n.body}</p>}
+                <li key={n.id} className="flex items-start justify-between gap-2 text-[13px]">
+                  <span>
+                    <p className="font-medium">{n.title}</p>
+                    {n.body && <p className="text-gray-500">{n.body}</p>}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label={`Dismiss notification: ${n.title}`}
+                    onClick={async () => {
+                      await api.post(`/notifications/${n.id}/read`).catch(() => undefined);
+                      setNotifs((ns: any[]) => ns.filter((x) => x.id !== n.id));
+                    }}
+                    className="rounded-lg px-2 py-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                  >
+                    ×
+                  </button>
                 </li>
               ))}
             </ul>
@@ -139,9 +152,9 @@ export default function DashboardPage() {
             <Link
               key={c.to}
               to={c.to}
-              className="rounded-xl border border-gray-200 bg-white p-4 hover:border-teal-600 md:p-5"
+              className="rounded-xl border border-gray-200 bg-white p-4 hover:border-primary md:p-5"
             >
-              <p className="text-sm font-semibold text-teal-800">{c.title}</p>
+              <p className="text-sm font-semibold text-primary-ink">{c.title}</p>
               <p className="mt-1 text-xs text-gray-500">{c.desc}</p>
             </Link>
           ))}

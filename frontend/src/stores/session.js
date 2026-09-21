@@ -29,6 +29,10 @@ export const useSessionStore = create((set) => ({
     clear: () => {
         localStorage.removeItem(KEY);
         localStorage.removeItem('ventapos:orgId');
+        localStorage.removeItem('ventapos:cartCount');
         set({ storeId: null });
+        // Drop all cached rows: the next login belongs to a different account
+        // and must never see the previous account's data, even for a frame.
+        queryClient.clear();
     },
 }));

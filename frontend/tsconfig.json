@@ -8,8 +8,6 @@
     "allowSyntheticDefaultImports": true,
     "strict": true,
     "jsx": "react-jsx",
-    "baseUrl": ".",
-    "paths": { "@/*": ["src/*"] },
     "types": ["vite/client"]
   },
   "include": ["src"]
