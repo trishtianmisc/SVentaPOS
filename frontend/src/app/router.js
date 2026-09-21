@@ -10,6 +10,7 @@ import CustomersPage from '../pages/Customers';
 import SuppliersPage from '../pages/Suppliers';
 import ExpensesPage from '../pages/Expenses';
 import ReportsPage from '../pages/Reports';
+import AdminPage from '../pages/Admin';
 import AppLayout from '../components/layout/AppLayout';
 import { useAuthStore } from '../stores/auth-store';
 function Guard({ children }) {
@@ -51,6 +52,7 @@ export const router = createBrowserRouter([
                     { path: '/suppliers', element: _jsx(SuppliersPage, {}) },
                     { path: '/expenses', element: _jsx(ExpensesPage, {}) },
                     { path: '/reports', element: _jsx(ReportsPage, {}) },
+                    { path: '/admin', element: _jsx(AdminPage, {}) },
                     { path: '/dashboard', element: _jsx(DashboardPage, {}) },
                 ],
             },

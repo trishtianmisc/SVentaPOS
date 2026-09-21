@@ -1,8 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api-client';
 import { qk } from '../lib/query-keys';
 import { formatPHP } from '../utils/currency';
+import { Badge } from '../components/ui';
+import { useSessionStore } from '../stores/session';
 import {
   useCategories,
   useCustomers,
@@ -55,8 +57,9 @@ export default function POSPage() {
   const categories = categoriesQ.data ?? [];
   const customers = customersQ.data ?? [];
   const stock = useMemo(() => {
-    const inv: Record<string, number> = {};
-    for (const r of inventoryQ.data ?? []) inv[r.product_id] = r.quantity;
+    const inv: Record<string, { qty: number; reorder: number }> = {};
+    for (const r of inventoryQ.data ?? [])
+      inv[r.product_id] = { qty: r.quantity, reorder: r.reorder_level ?? 0 };
     return inv;
   }, [inventoryQ.data]);
 
@@ -71,9 +74,22 @@ export default function POSPage() {
   const [tendered, setTendered] = useState('');
   const [reference, setReference] = useState('');
   const [receipt, setReceipt] = useState<Receipt | null>(null);
+  const [receiptLines, setReceiptLines] = useState<any[]>([]);
   const [customerId, setCustomerId] = useState('');
   const [msg, setMsg] = useState('');
   const [charging, setCharging] = useState(false);
+
+  // Cart marker lets the store picker confirm before clearing (prices and
+  // stock differ between stores). Cleared whenever the active store changes.
+  const storeVersion = useSessionStore((s) => s.storeVersion);
+  const count = cart.reduce((s, l) => s + l.qty, 0);
+  useEffect(() => {
+    localStorage.setItem('ventapos:cartCount', String(count));
+  }, [count]);
+  const firstVersion = useRef(storeVersion);
+  useEffect(() => {
+    if (storeVersion !== firstVersion.current) setCart([]);
+  }, [storeVersion]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -85,14 +101,21 @@ export default function POSPage() {
   }, [products, cat, query]);
 
   const outOfStock = (p: Product) =>
-    p.track_inventory && (stock[p.id] ?? 0) <= 0;
+    p.track_inventory && (stock[p.id]?.qty ?? 0) <= 0;
+
+  const lowStock = (p: Product) => {
+    const s = stock[p.id];
+    return (
+      p.track_inventory && s !== undefined && s.reorder > 0 && s.qty > 0 && s.qty <= s.reorder
+    );
+  };
 
   const add = (p: Product) => {
     if (outOfStock(p)) return;
     setCart((c) => {
       const line = c.find((l) => l.product.id === p.id);
       if (line) {
-        const max = p.track_inventory ? (stock[p.id] ?? 0) : Infinity;
+        const max = p.track_inventory ? (stock[p.id]?.qty ?? 0) : Infinity;
         if (line.qty + 1 > max) {
           setMsg(`Only ${max} left in stock`);
           return c;
@@ -104,7 +127,6 @@ export default function POSPage() {
   };
 
   const estimate = cart.reduce((s, l) => s + l.product.retail_price * l.qty, 0);
-  const count = cart.reduce((s, l) => s + l.qty, 0);
 
   const canCharge =
     cart.length > 0 &&
@@ -143,6 +165,11 @@ export default function POSPage() {
       setCart([]);
       setTendered('');
       setReference('');
+      // Line items for the printed receipt (best-effort; totals already shown).
+      api
+        .get(`/sales/${res.data.data.sale_id}`)
+        .then((d) => setReceiptLines(d.data.data.items ?? []))
+        .catch(() => setReceiptLines([]));
       // Stock and balances changed server-side: mark stale so the next
       // read refetches exactly once, instead of refetching everything here.
       await Promise.all([
@@ -224,8 +251,16 @@ export default function POSPage() {
                   </span>
                   <span className="mt-1 w-full truncate text-xs font-medium">{p.name}</span>
                   <span className="text-xs font-bold text-teal-800">{formatPHP(p.retail_price)}</span>
-                  <span className="text-[11px] text-gray-400">
-                    {oos ? 'Out of stock' : p.track_inventory ? `${stock[p.id] ?? 0} left` : '•'}
+                  <span className="mt-1">
+                    {oos ? (
+                      <Badge tone="red">Out of stock</Badge>
+                    ) : lowStock(p) ? (
+                      <Badge tone="amber">Low · {stock[p.id]?.qty} left</Badge>
+                    ) : (
+                      <span className="text-[11px] text-gray-400">
+                        {p.track_inventory ? `${stock[p.id]?.qty ?? 0} left` : '•'}
+                      </span>
+                    )}
                   </span>
                 </button>
               );
@@ -375,11 +410,24 @@ export default function POSPage() {
 
       {/* Receipt modal */}
       {receipt && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center">
-          <div className="w-full max-w-sm rounded-t-2xl bg-white p-6 sm:rounded-2xl">
-            <p className="text-center text-sm text-gray-500">Payment successful</p>
-            <p className="mt-1 text-center text-lg font-bold">{receipt.receipt_number}</p>
-            <div className="mt-4 space-y-1 text-sm">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 print:static print:block print:bg-white sm:items-center">
+          <div className="receipt-80 w-full max-w-sm rounded-t-2xl bg-white p-6 sm:rounded-2xl print:max-w-none print:rounded-none print:p-0 print:shadow-none">
+            <p className="text-center font-bold">VentaPOS</p>
+            <p className="text-center">{receipt.receipt_number}</p>
+            <p className="text-center text-gray-500">
+              {new Date().toLocaleString()} · {method.toUpperCase()}
+            </p>
+            <hr />
+            {receiptLines.map((i: any) => (
+              <p key={i.id} className="flex justify-between">
+                <span>
+                  {i.product_name_snapshot} × {i.quantity}
+                </span>
+                <span>{formatPHP(i.line_total)}</span>
+              </p>
+            ))}
+            <hr />
+            <div className="mt-4 space-y-1 text-sm print:mt-0">
               <p className="flex justify-between">
                 <span>Total</span>
                 <span className="font-bold">{formatPHP(receipt.total)}</span>
@@ -399,15 +447,19 @@ export default function POSPage() {
                 </p>
               )}
             </div>
+            <p className="mt-2 hidden text-center print:block">Thank you for shopping!</p>
             <div className="mt-5 grid grid-cols-2 gap-2 print:hidden">
               <button
-                className="rounded-lg border p-2"
-                onClick={() => setReceipt(null)}
+                className="h-10 rounded-lg border border-gray-300 text-sm font-medium"
+                onClick={() => {
+                  setReceipt(null);
+                  setReceiptLines([]);
+                }}
               >
                 New sale
               </button>
               <button
-                className="rounded-lg bg-teal-700 p-2 text-white"
+                className="h-10 rounded-lg bg-teal-700 text-sm font-medium text-white"
                 onClick={() => window.print()}
               >
                 Print

@@ -9,6 +9,7 @@ import CustomersPage from '../pages/Customers';
 import SuppliersPage from '../pages/Suppliers';
 import ExpensesPage from '../pages/Expenses';
 import ReportsPage from '../pages/Reports';
+import AdminPage from '../pages/Admin';
 import AppLayout from '../components/layout/AppLayout';
 import { useAuthStore } from '../stores/auth-store';
 
@@ -53,6 +54,7 @@ export const router = createBrowserRouter([
           { path: '/suppliers', element: <SuppliersPage /> },
           { path: '/expenses', element: <ExpensesPage /> },
           { path: '/reports', element: <ReportsPage /> },
+          { path: '/admin', element: <AdminPage /> },
           { path: '/dashboard', element: <DashboardPage /> },
         ],
       },

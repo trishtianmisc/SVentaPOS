@@ -72,7 +72,7 @@ export default function CustomersPage() {
 
   return (
     <div className="w-full p-4 md:p-6">
-      <h1 className="text-xl font-bold">Customers & Utang</h1>
+      <h1 className="text-xl font-semibold md:text-2xl">Customers & Utang</h1>
       {msg && <p className="mt-2 text-sm text-red-600">{msg}</p>}
       <div className="mt-4 grid gap-4 lg:grid-cols-[320px_1fr_1fr]">
         <section className="h-fit rounded-xl border bg-white p-4">

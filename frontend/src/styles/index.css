@@ -3,3 +3,30 @@
 @tailwind utilities;
 
 /* Mobile-first POS defaults. Keep POS interactions fast and touch-friendly. */
+
+/* 80mm thermal receipt. App chrome already hides via print:hidden. */
+@media print {
+  @page {
+    size: 80mm auto;
+    margin: 3mm;
+  }
+
+  body {
+    background: #fff;
+  }
+
+  .receipt-80 {
+    width: 72mm;
+    margin: 0 auto;
+    color: #000;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .receipt-80 hr {
+    border: none;
+    border-top: 1px dashed #000;
+    margin: 6px 0;
+  }
+}

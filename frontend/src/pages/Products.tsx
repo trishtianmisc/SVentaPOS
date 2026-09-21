@@ -28,7 +28,7 @@ export default function ProductsPage() {
 
   return (
     <div className="w-full p-4 md:p-6">
-      <h1 className="text-xl font-bold">Products</h1>
+      <h1 className="text-xl font-semibold md:text-2xl">Products</h1>
       <div className="mt-4 grid gap-6 lg:grid-cols-[320px_1fr]">
         <section className="h-fit rounded-xl border bg-white p-4">
           <h2 className="text-sm font-semibold text-gray-700">Add product</h2>

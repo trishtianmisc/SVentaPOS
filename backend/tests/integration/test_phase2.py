@@ -8,11 +8,14 @@ from app.api.v1 import dependencies as deps
 from app.core.exceptions import ConflictError, NotFoundError, ValidationAppError
 from app.main import app
 from app.services import (
+    audit_service,
     customer_service,
     expense_service,
+    notification_service,
     purchase_service,
     report_service,
     sale_service,
+    subscription_service,
 )
 
 ORG = str(uuid.uuid4())
@@ -116,6 +119,10 @@ def ctx2(client, monkeypatch):
         return sale
 
     monkeypatch.setattr(sale_service, "complete_sale", _complete)
+    # Phase 3 cross-cutting calls: no-op fakes (no network in tests).
+    monkeypatch.setattr(subscription_service, "check_limit", lambda o, r: None)
+    monkeypatch.setattr(audit_service, "record", lambda *a, **k: None)
+    monkeypatch.setattr(notification_service, "notify", lambda *a, **k: None)
 
     # --- purchasing ---
     def _create_po(org, store, user, sup, items):

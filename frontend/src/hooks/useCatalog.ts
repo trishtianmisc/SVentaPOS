@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api-client';
 import { qk } from '../lib/query-keys';
+import { useSessionStore } from '../stores/session';
 
 export interface Product {
   id: string;
@@ -17,6 +18,9 @@ export interface Category {
 export interface InventoryRow {
   product_id: string;
   quantity: number;
+  product_name?: string;
+  minimum_stock?: number | null;
+  reorder_level?: number | null;
 }
 export interface Customer {
   id: string;
@@ -59,10 +63,13 @@ export function useCategories() {
 }
 
 export function useInventory() {
+  // Store-scoped key: switching stores must never show another store's cache.
+  const storeId = useSessionStore((s) => s.storeId);
   return useQuery<InventoryRow[]>({
-    queryKey: qk.inventory,
+    queryKey: [...qk.inventory, storeId ?? 'none'],
     queryFn: () => list('/inventory'),
     staleTime: 15_000,
+    enabled: !!storeId,
   });
 }
 

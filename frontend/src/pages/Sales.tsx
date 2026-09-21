@@ -28,7 +28,7 @@ export default function SalesPage() {
 
   return (
     <div className="w-full p-4 md:p-6">
-      <h1 className="text-xl font-bold">Sales history</h1>
+      <h1 className="text-xl font-semibold md:text-2xl">Sales history</h1>
       {msg && <p className="mt-2 text-sm">{msg}</p>}
       <div className="mt-4 grid gap-6 lg:grid-cols-2">
         <section className="rounded-xl border bg-white p-4">

@@ -23,7 +23,7 @@ export default function ReportsPage() {
 
   return (
     <div className="w-full p-4 md:p-6">
-      <h1 className="text-xl font-bold">Reports</h1>
+      <h1 className="text-xl font-semibold md:text-2xl">Reports</h1>
       <div className="mt-3 flex flex-wrap gap-2">
         {TABS.map((t) => (
           <button

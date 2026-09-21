@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api-client';
 import { qk } from '../lib/query-keys';
+import { useSessionStore } from '../stores/session';
 const list = (path) => api.get(path).then((r) => r.data.data ?? []);
 /**
  * Shared catalog queries. One network request per key no matter how many
@@ -33,10 +34,13 @@ export function useCategories() {
     });
 }
 export function useInventory() {
+    // Store-scoped key: switching stores must never show another store's cache.
+    const storeId = useSessionStore((s) => s.storeId);
     return useQuery({
-        queryKey: qk.inventory,
+        queryKey: [...qk.inventory, storeId ?? 'none'],
         queryFn: () => list('/inventory'),
         staleTime: 15000,
+        enabled: !!storeId,
     });
 }
 export function useCustomers() {

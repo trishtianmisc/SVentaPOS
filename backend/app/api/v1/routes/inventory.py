@@ -12,7 +12,7 @@ from app.api.v1.dependencies import (
 )
 from app.schemas.common import SuccessResponse
 from app.schemas.inventory import InventoryAdjust, InventoryRead, MovementRead
-from app.services import inventory_service
+from app.services import audit_service, inventory_service
 
 router = APIRouter()
 
@@ -67,9 +67,12 @@ def adjust(
     store: dict | None = Depends(get_current_store),
     user: CurrentUser = Depends(get_current_user),
 ):
-    return SuccessResponse(
-        data=inventory_service.adjust(
-            str(org_id), _store_id(store), str(user.id), str(body.product_id),
-            body.quantity, body.movement_type, body.reason, body.unit_cost),
-        message="Stock adjusted",
-    )
+    result = inventory_service.adjust(
+        str(org_id), _store_id(store), str(user.id), str(body.product_id),
+        body.quantity, body.movement_type, body.reason, body.unit_cost)
+    audit_service.record(
+        str(org_id), "inventory.adjust", "product", str(body.product_id),
+        user_id=str(user.id), store_id=_store_id(store),
+        metadata={"delta": body.quantity, "type": body.movement_type,
+                  "reason": body.reason})
+    return SuccessResponse(data=result, message="Stock adjusted")

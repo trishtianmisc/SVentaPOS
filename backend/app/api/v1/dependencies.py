@@ -173,3 +173,15 @@ def require_org_role(*allowed: str):
         return user
 
     return checker
+
+
+async def require_platform_admin(
+    user: CurrentUser = Depends(get_current_user),
+) -> CurrentUser:
+    """SaaS operator gate. Allowlisted emails in PLATFORM_ADMIN_EMAILS.
+    Tenant-scoped actions taken through this gate must be audit-logged."""
+    if not settings.platform_admins:
+        raise ForbiddenError("Platform administration is not configured")
+    if (user.email or "").lower() not in settings.platform_admins:
+        raise ForbiddenError("Platform administration only")
+    return user

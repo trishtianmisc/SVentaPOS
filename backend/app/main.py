@@ -32,9 +32,19 @@ app.include_router(api_router, prefix=settings.api_v1_prefix)
 
 @app.get("/health", tags=["system"])
 def health():
-    return {"status": "ok", "env": settings.env}
+    return {"status": "ok", "env": settings.env, "version": app.version}
 
 
 @app.get(f"{settings.api_v1_prefix}/health", tags=["system"])
 def health_v1():
-    return {"status": "ok", "env": settings.env}
+    db = "unknown"
+    try:
+        from app.core.database import get_supabase_service
+
+        get_supabase_service().table("organizations").select(
+            "id", count="exact").limit(0).execute()
+        db = "up"
+    except Exception:
+        db = "down"
+    return {"status": "ok" if db == "up" else "degraded",
+            "env": settings.env, "version": app.version, "database": db}

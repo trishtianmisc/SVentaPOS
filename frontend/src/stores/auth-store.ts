@@ -29,8 +29,9 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
   signOut: async () => {
     await supabase.auth.signOut();
-    localStorage.removeItem('ventapos:orgId');
-    localStorage.removeItem('ventapos:storeId');
+    // Session store clears persisted org/store ids (shared-device safe).
+    const { useSessionStore } = await import('./session');
+    useSessionStore.getState().clear();
     set({ userId: null, email: null, orgId: null });
   },
 }));

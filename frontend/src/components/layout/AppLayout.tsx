@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/auth-store';
+import { useSessionStore, confirmStoreSwitch } from '../../stores/session';
 import { api } from '../../lib/api-client';
 
 const NAV = [
@@ -12,6 +13,7 @@ const NAV = [
   { to: '/suppliers', label: 'Suppliers' },
   { to: '/expenses', label: 'Expenses' },
   { to: '/reports', label: 'Reports' },
+  { to: '/admin', label: 'Admin' },
   { to: '/dashboard', label: 'Dashboard' },
 ];
 
@@ -36,23 +38,29 @@ function useClock() {
 export default function AppLayout() {
   const { email, signOut } = useAuthStore();
   const navigate = useNavigate();
-  const [storeName, setStoreName] = useState<string | null>(null);
+  const storeId = useSessionStore((s) => s.storeId);
+  const setStore = useSessionStore((s) => s.setStore);
+  const [stores, setStores] = useState<any[]>([]);
   const clock = useClock();
+  const storeName = stores.find((s: any) => s.id === storeId)?.name ?? null;
 
   useEffect(() => {
     api
       .get('/stores')
       .then((r) => {
         const list = r.data.data ?? [];
-        const active = localStorage.getItem('ventapos:storeId');
-        const match = list.find((s: any) => s.id === active) ?? list[0];
-        if (match) {
-          setStoreName(match.name);
-          if (!active) localStorage.setItem('ventapos:storeId', match.id);
-        }
+        setStores(list);
+        if (!storeId && list.length === 1) setStore(list[0].id);
       })
       .catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const pickStore = (id: string) => {
+    if (!id || id === storeId) return;
+    if (!confirmStoreSwitch()) return;
+    setStore(id);
+  };
 
   const logout = async () => {
     await signOut();
@@ -65,9 +73,25 @@ export default function AppLayout() {
       <aside className="hidden w-60 shrink-0 flex-col border-r bg-white print:hidden md:flex">
         <div className="border-b px-5 py-4">
           <p className="text-lg font-bold text-teal-800">VentaPOS</p>
-          <p className="mt-1 truncate text-xs text-gray-500">
-            {storeName ?? 'Loading store…'} · {clock}
-          </p>
+          {stores.length > 1 ? (
+            <select
+              aria-label="Active store"
+              className="mt-2 h-9 w-full rounded-lg border border-gray-300 bg-white px-2 text-[13px]"
+              value={storeId ?? ''}
+              onChange={(e) => pickStore(e.target.value)}
+            >
+              <option value="">Select store…</option>
+              {stores.map((s: any) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <p className="mt-1 truncate text-xs text-gray-500">
+              {storeName ?? 'Loading store…'} · {clock}
+            </p>
+          )}
         </div>
         <nav className="flex flex-1 flex-col gap-1 p-3">
           {NAV.map((t) => (

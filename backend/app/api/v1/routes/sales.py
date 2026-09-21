@@ -13,7 +13,7 @@ from app.api.v1.dependencies import (
 from app.core.exceptions import ForbiddenError
 from app.schemas.common import SuccessResponse
 from app.schemas.sale import SaleCreate, SaleDetail, SaleRead, SaleVoid
-from app.services import sale_service
+from app.services import audit_service, notification_service, sale_service
 
 router = APIRouter()
 POS_ROLES = ["owner", "manager", "cashier"]
@@ -42,6 +42,17 @@ def create_sale(
         str(body.customer_id) if body.customer_id else None,
         body.limit_override, body.limit_reason,
     )
+    if body.limit_override and result.get("utang"):
+        audit_service.record(
+            o, "utang.limit_override", "sale", str(result.get("sale_id")),
+            user_id=str(user.id), store_id=s,
+            metadata={"reason": body.limit_reason or "",
+                      "customer_id": str(body.customer_id)})
+        notification_service.notify(
+            o, "utang",
+            f"Credit limit overridden by {user.email or 'staff'}",
+            f"Sale {result.get('receipt_number')}: {body.limit_reason or ''}",
+            store_id=s)
     return SuccessResponse(data=result, message="Sale completed")
 
 
@@ -76,7 +87,11 @@ def void_sale(
     user: CurrentUser = Depends(get_current_user),
 ):
     o, s = _ctx(org_id, store)
-    return SuccessResponse(
-        data=sale_service.void_sale(o, s, str(sale_id), str(user.id), body.reason),
-        message="Sale voided",
-    )
+    result = sale_service.void_sale(o, s, str(sale_id), str(user.id), body.reason)
+    audit_service.record(
+        o, "sale.void", "sale", str(sale_id),
+        user_id=str(user.id), store_id=s, metadata={"reason": body.reason})
+    notification_service.notify(
+        o, "sale", f"Sale voided by {user.email or 'staff'}",
+        f"Reason: {body.reason}", store_id=s)
+    return SuccessResponse(data=result, message="Sale voided")

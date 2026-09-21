@@ -10,7 +10,14 @@ import pytest
 from app.api.v1 import dependencies as deps
 from app.core.exceptions import ConflictError, NotFoundError, ValidationAppError
 from app.main import app
-from app.services import inventory_service, product_service, sale_service
+from app.services import (
+    audit_service,
+    inventory_service,
+    notification_service,
+    product_service,
+    sale_service,
+    subscription_service,
+)
 
 ORG = str(uuid.uuid4())
 STORE = str(uuid.uuid4())
@@ -133,6 +140,10 @@ def ctx(client, monkeypatch):
                         lambda s, p: {"store_id": s, "product_id": p,
                                       "quantity": state["inventory"].get(p, 0)})
     monkeypatch.setattr(sale_service, "complete_sale", fake_complete)
+    # Phase 3 cross-cutting calls: no-op fakes (no network in tests).
+    monkeypatch.setattr(subscription_service, "check_limit", lambda o, r: None)
+    monkeypatch.setattr(audit_service, "record", lambda *a, **k: None)
+    monkeypatch.setattr(notification_service, "notify", lambda *a, **k: None)
     monkeypatch.setattr(sale_service, "void_sale", fake_void)
     monkeypatch.setattr(sale_service, "list_sales",
                         lambda o, s, limit=50: list(state["sales"].values()))
