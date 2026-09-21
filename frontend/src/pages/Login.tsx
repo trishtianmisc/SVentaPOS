@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase-client';
 import { api } from '../lib/api-client';
 import { useSessionStore } from '../stores/session';
@@ -26,21 +26,27 @@ export default function LoginPage() {
       // void) send X-Store-Id. Auto-select when the user has exactly 1.
       // setStore() also invalidates store-scoped caches for the new store.
       const setStore = useSessionStore.getState().setStore;
+      let storeCount = -1;
       try {
         const stores = await api.get('/stores');
         const list = stores.data.data ?? [];
+        storeCount = list.length;
         const current = useSessionStore.getState().storeId;
         if (list.length === 1) {
           setStore(list[0].id);
         } else if (current && !list.some((s: any) => s.id === current)) {
           setStore(null);
         }
-        if (list.length === 0) {
-          setMsg('Logged in — no store assigned yet. Ask an owner to add you.');
-          return;
-        }
       } catch {
         // stores lookup is best-effort; catalog still works via org role.
+      }
+      if (!orgId) {
+        navigate('/onboarding', { replace: true });
+        return;
+      }
+      if (storeCount === 0) {
+        setMsg('Logged in — no store assigned yet. Ask an owner to add you.');
+        return;
       }
       navigate('/pos', { replace: true });
     } catch {
@@ -80,6 +86,12 @@ export default function LoginPage() {
           </Button>
         </div>
         {msg && <p className="mt-3 text-[13px]">{msg}</p>}
+        <p className="mt-4 text-center text-[13px] text-gray-500">
+          New here?{' '}
+          <Link to="/register" className="font-medium text-teal-700">
+            Create an account
+          </Link>
+        </p>
       </div>
     </div>
   );

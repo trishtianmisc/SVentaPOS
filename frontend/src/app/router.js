@@ -1,6 +1,8 @@
 import { jsx as _jsx } from "react/jsx-runtime";
 import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
 import LoginPage from '../pages/Login';
+import RegisterPage from '../pages/Register';
+import OnboardingPage from '../pages/Onboarding';
 import DashboardPage from '../pages/Dashboard';
 import ProductsPage from '../pages/Products';
 import InventoryPage from '../pages/Inventory';
@@ -25,19 +27,33 @@ function RootRedirect() {
     const { userId, initialized } = useAuthStore();
     if (!initialized)
         return _jsx("div", { className: "p-6", children: "Loading\u2026" });
-    return _jsx(Navigate, { to: userId ? '/pos' : '/login', replace: true });
+    if (!userId)
+        return _jsx(Navigate, { to: "/login", replace: true });
+    // Fresh signups have no org yet; Onboarding bounces back here if set up.
+    if (!localStorage.getItem('ventapos:orgId'))
+        return _jsx(Navigate, { to: "/onboarding", replace: true });
+    return _jsx(Navigate, { to: "/pos", replace: true });
 }
 function LoginRoute() {
     const { userId, initialized } = useAuthStore();
     if (!initialized)
         return _jsx("div", { className: "p-6", children: "Loading\u2026" });
     if (userId)
-        return _jsx(Navigate, { to: "/pos", replace: true });
+        return _jsx(Navigate, { to: "/onboarding", replace: true });
     return _jsx(LoginPage, {});
+}
+function RegisterRoute() {
+    const { userId, initialized } = useAuthStore();
+    if (!initialized)
+        return _jsx("div", { className: "p-6", children: "Loading\u2026" });
+    if (userId)
+        return _jsx(Navigate, { to: "/onboarding", replace: true });
+    return _jsx(RegisterPage, {});
 }
 export const router = createBrowserRouter([
     { path: '/', element: _jsx(RootRedirect, {}) },
     { path: '/login', element: _jsx(LoginRoute, {}) },
+    { path: '/register', element: _jsx(RegisterRoute, {}) },
     {
         element: (_jsx(Guard, { children: _jsx(Outlet, {}) })),
         children: [
@@ -59,4 +75,9 @@ export const router = createBrowserRouter([
         ],
     },
     { path: '*', element: _jsx(RootRedirect, {}) },
+    // Chromeless: account setup happens outside the app shell.
+    {
+        element: (_jsx(Guard, { children: _jsx(Outlet, {}) })),
+        children: [{ path: '/onboarding', element: _jsx(OnboardingPage, {}) }],
+    },
 ]);

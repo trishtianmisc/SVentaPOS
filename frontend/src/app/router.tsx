@@ -1,5 +1,7 @@
 import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
 import LoginPage from '../pages/Login';
+import RegisterPage from '../pages/Register';
+import OnboardingPage from '../pages/Onboarding';
 import DashboardPage from '../pages/Dashboard';
 import ProductsPage from '../pages/Products';
 import InventoryPage from '../pages/Inventory';
@@ -23,19 +25,31 @@ function Guard({ children }: { children: JSX.Element }) {
 function RootRedirect() {
   const { userId, initialized } = useAuthStore();
   if (!initialized) return <div className="p-6">Loading…</div>;
-  return <Navigate to={userId ? '/pos' : '/login'} replace />;
+  if (!userId) return <Navigate to="/login" replace />;
+  // Fresh signups have no org yet; Onboarding bounces back here if set up.
+  if (!localStorage.getItem('ventapos:orgId'))
+    return <Navigate to="/onboarding" replace />;
+  return <Navigate to="/pos" replace />;
 }
 
 function LoginRoute() {
   const { userId, initialized } = useAuthStore();
   if (!initialized) return <div className="p-6">Loading…</div>;
-  if (userId) return <Navigate to="/pos" replace />;
+  if (userId) return <Navigate to="/onboarding" replace />;
   return <LoginPage />;
+}
+
+function RegisterRoute() {
+  const { userId, initialized } = useAuthStore();
+  if (!initialized) return <div className="p-6">Loading…</div>;
+  if (userId) return <Navigate to="/onboarding" replace />;
+  return <RegisterPage />;
 }
 
 export const router = createBrowserRouter([
   { path: '/', element: <RootRedirect /> },
   { path: '/login', element: <LoginRoute /> },
+  { path: '/register', element: <RegisterRoute /> },
   {
     element: (
       <Guard>
@@ -61,4 +75,13 @@ export const router = createBrowserRouter([
     ],
   },
   { path: '*', element: <RootRedirect /> },
+  // Chromeless: account setup happens outside the app shell.
+  {
+    element: (
+      <Guard>
+        <Outlet />
+      </Guard>
+    ),
+    children: [{ path: '/onboarding', element: <OnboardingPage /> }],
+  },
 ]);
