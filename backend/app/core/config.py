@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     env: str = "development"
     api_v1_prefix: str = "/api/v1"
     # 5173 = tenant PWA, 5174 = platform admin console.
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:5174"]
+    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:5174", "https://frontend-eight-mu-71.vercel.app",]
     supabase_url: str = ""
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
