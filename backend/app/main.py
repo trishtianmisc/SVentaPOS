@@ -1,4 +1,6 @@
 """VentaPOS FastAPI entrypoint - modular monolith. See docs/02-system-architecture.md."""
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -10,11 +12,21 @@ from app.middleware.logging_mw import logging_middleware
 
 setup_logging(settings.log_level)
 
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    from app.core.database import close_supabase_http
+
+    yield
+    close_supabase_http()
+
+
 app = FastAPI(
     title="VentaPOS API",
     version="0.1.0",
     docs_url="/docs" if settings.is_dev else None,
     redoc_url=None,
+    lifespan=lifespan,
 )
 
 app.add_middleware(

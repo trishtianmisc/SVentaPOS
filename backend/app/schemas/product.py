@@ -18,6 +18,8 @@ class ProductCreate(BaseModel):
     reorder_level: float = Field(default=0, ge=0)
     track_inventory: bool = True
     active: bool = True
+    vat_exempt: bool = False
+    image_path: str | None = Field(default=None, max_length=500)
 
 
 class ProductUpdate(BaseModel):
@@ -34,6 +36,8 @@ class ProductUpdate(BaseModel):
     reorder_level: float | None = Field(default=None, ge=0)
     track_inventory: bool | None = None
     active: bool | None = None
+    vat_exempt: bool | None = None
+    image_path: str | None = Field(default=None, max_length=500)
 
 
 class ProductRead(BaseModel):
@@ -52,10 +56,32 @@ class ProductRead(BaseModel):
     reorder_level: float
     track_inventory: bool
     active: bool
+    vat_exempt: bool = False
+    image_path: str | None = None
     quantity: float | None = None  # joined stock for POS listing
+    created_at: str | None = None
 
 
 class ProductImportPreview(BaseModel):
     """Phase 1 stub: validation preview only, no bulk write."""
 
     message: str = "CSV import preview is a stub in Phase 1"
+
+
+class UnitCreate(BaseModel):
+    unit_name: str = Field(min_length=1, max_length=32)
+    conversion_factor: float = Field(gt=0,
+                                     description="Base units per sell unit")
+    selling_price: float | None = Field(default=None, ge=0)
+    cost_price: float | None = Field(default=None, ge=0)
+    barcode: str | None = Field(default=None, max_length=64)
+
+
+class UnitRead(BaseModel):
+    id: UUID
+    product_id: UUID
+    unit_name: str
+    conversion_factor: float
+    selling_price: float | None = None
+    cost_price: float | None = None
+    barcode: str | None = None

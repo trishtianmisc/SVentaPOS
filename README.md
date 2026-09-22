@@ -21,6 +21,13 @@ VentaPOS/
 │       ├── pwa/           # register-sw, IndexedDB, sync-engine
 │       ├── utils/ types/ styles/ assets/
 │       └── tests/
+├── admin/                 # Platform admin console (separate Vite app, port 5174)
+│   └── src/
+│       ├── app/           # Router, providers, queryClient
+│       ├── pages/         # Dashboard, Organizations, Org detail, Upgrade requests
+│       ├── components/    # ui / layout
+│       ├── lib/ stores/
+│       └── styles/ utils/
 ├── backend/               # FastAPI modular monolith (Railway/Render/Fly.io)
 │   └── app/
 │       ├── main.py
@@ -74,7 +81,16 @@ copy .env.example .env
 npm run dev
 ```
 
-### 4. Supabase
+### 4. Admin console (platform admins only)
+```powershell
+cd admin
+npm install
+copy .env.example .env   # set VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY
+npm run dev              # http://localhost:5174
+```
+Sign-in requires an email listed in `backend/.env` → `PLATFORM_ADMIN_EMAILS`.
+
+### 5. Supabase
 - Create project at supabase.com
 - Run `supabase/migrations/*.sql` in order
 - Set RLS policies (see docs/03 + 05 + 11)

@@ -15,6 +15,7 @@ from app.services import (
     purchase_service,
     report_service,
     sale_service,
+    shift_service,
     subscription_service,
 )
 
@@ -124,6 +125,9 @@ def ctx2(client, monkeypatch):
     monkeypatch.setattr(audit_service, "record", lambda *a, **k: None)
     monkeypatch.setattr(notification_service, "notify", lambda *a, **k: None)
 
+    # Hard shift gate: an open shift exists for all sales in this flow.
+    monkeypatch.setattr(shift_service, "current",
+                        lambda o, s: {"id": "shift-open", "status": "OPEN"})
     # --- purchasing ---
     def _create_po(org, store, user, sup, items):
         pid = str(uuid.uuid4())

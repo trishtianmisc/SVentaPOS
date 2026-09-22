@@ -16,6 +16,7 @@ from app.services import (
     notification_service,
     product_service,
     sale_service,
+    shift_service,
     subscription_service,
 )
 
@@ -129,6 +130,9 @@ def ctx(client, monkeypatch):
     monkeypatch.setattr(product_service, "deactivate_product",
                         lambda o, p: fake_get_product(o, p))
     monkeypatch.setattr(inventory_service, "adjust", fake_adjust)
+    # Hard shift gate: an open shift exists for all sales in this flow.
+    monkeypatch.setattr(shift_service, "current",
+                        lambda o, s: {"id": "shift-open", "status": "OPEN"})
     monkeypatch.setattr(inventory_service, "list_inventory", lambda s: [
         {"store_id": s, "product_id": pid, "quantity": q,
          "product_name": state["products"][pid]["name"]}
@@ -248,3 +252,19 @@ def test_cashier_blocked_from_catalog(client, ctx, monkeypatch):
     app.dependency_overrides[deps.get_current_user] = _cashier
     r = client.post("/api/v1/products", json={"name": "Nope", "retail_price": 1})
     assert r.status_code == 403
+
+
+def test_damage_and_expired_types_passthrough(client, ctx):
+    r = client.post("/api/v1/products", json={"name": "Bread", "retail_price": 5})
+    pid = r.json()["data"]["id"]
+    client.post("/api/v1/inventory/adjust", json={
+        "product_id": pid, "quantity": 10,
+        "movement_type": "PURCHASE", "reason": "delivery"})
+    for mtype, qty in (("DAMAGE", -2), ("EXPIRED", -3)):
+        r = client.post("/api/v1/inventory/adjust", json={
+            "product_id": pid, "quantity": qty,
+            "movement_type": mtype, "reason": "write-off test"})
+        assert r.status_code == 200, r.text
+        assert r.json()["data"]["new_quantity"] == 10 + (-2 if mtype == "DAMAGE" else -5)
+    r = client.get(f"/api/v1/inventory/{pid}")
+    assert r.json()["data"]["quantity"] == 5

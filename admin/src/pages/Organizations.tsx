@@ -1,0 +1,120 @@
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { api } from '../lib/api-client';
+import { Badge, Button, EmptyState, PageHeader, Section, Select, Spinner, Table, toast } from '../components/ui';
+import { AccessDenied } from '../components/AccessDenied';
+
+export default function OrganizationsPage() {
+  const [orgs, setOrgs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [plans, setPlans] = useState<any[]>([]);
+  const [sel, setSel] = useState<Record<string, string>>({});
+  const [msg, setMsg] = useState('');
+  const [denied, setDenied] = useState(false);
+
+  const load = async () => {
+    const [o, p] = await Promise.all([
+      api.get('/admin/organizations'),
+      api.get('/subscriptions/plans'),
+    ]);
+    setOrgs(o.data.data);
+    setPlans(p.data.data);
+  };
+
+  useEffect(() => {
+    load()
+      .catch((e) => {
+        if (e.response?.status === 403) setDenied(true);
+        else setMsg(e.response?.data?.error?.message ?? 'Load failed');
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  const setPlan = async (orgId: string) => {
+    const plan = sel[orgId];
+    if (!plan) return;
+    setMsg('');
+    try {
+      await api.post(`/admin/organizations/${orgId}/subscription`, { plan });
+      toast('success', `Plan set to ${plan}`);
+      await load();
+    } catch (e: any) {
+      setMsg(e.response?.data?.error?.message ?? 'Update failed');
+    }
+  };
+
+  if (denied) return <AccessDenied />;
+
+  return (
+    <div className="w-full p-4 md:p-6">
+      <PageHeader title="Organizations" sub="Plans, usage, and subscriptions" />
+      {msg && <p className="mb-4 text-[13px] text-red-600">{msg}</p>}
+      <Section title="All organizations">
+        {loading ? (
+          <Spinner label="Loading organizations…" />
+        ) : orgs.length === 0 ? (
+          <EmptyState title="No organizations found" />
+        ) : (
+          <Table head={['Organization', 'Plan', 'Usage', '']}>
+            {orgs.map((o: any) => (
+              <tr key={o.organization.id}>
+                <td className="px-3 py-2 first:pl-0">
+                  <Link
+                    to={`/organizations/${o.organization.id}`}
+                    className="font-medium text-primary hover:underline"
+                  >
+                    {o.organization.name}
+                  </Link>
+                  <p className="text-xs text-gray-400">
+                    {o.organization.status}
+                    {o.provider ? ` · ${o.provider}` : ''}
+                    {o.current_period_end
+                      ? ` · renews ${new Date(o.current_period_end).toLocaleDateString()}`
+                      : ''}
+                    {o.downgraded ? ` · ${o.downgraded} (on Free limits)` : ''}
+                  </p>
+                </td>
+                <td className="px-3 py-2 text-right">
+                  <Badge tone={o.status === 'active' ? 'green' : 'amber'}>
+                    {o.plan ?? '—'} · {o.status ?? ''}
+                  </Badge>
+                </td>
+                <td className="px-3 py-2 text-right text-xs text-gray-500">
+                  {o.usage
+                    ? `${o.usage.stores ?? '?'} st · ${o.usage.products ?? '?'} pr · ${o.usage.users ?? '?'} users`
+                    : '—'}
+                </td>
+                <td className="px-3 py-2 text-right last:pr-0">
+                  <span className="inline-flex gap-2">
+                    <Select
+                      aria-label="Plan"
+                      className="h-9"
+                      value={sel[o.organization.id] ?? ''}
+                      onChange={(e) =>
+                        setSel({ ...sel, [o.organization.id]: e.target.value })
+                      }
+                    >
+                      <option value="">Set plan…</option>
+                      {plans.map((p: any) => (
+                        <option key={p.id} value={p.name}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </Select>
+                    <Button
+                      size="compact"
+                      disabled={!sel[o.organization.id]}
+                      onClick={() => setPlan(o.organization.id)}
+                    >
+                      Apply
+                    </Button>
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </Table>
+        )}
+      </Section>
+    </div>
+  );
+}

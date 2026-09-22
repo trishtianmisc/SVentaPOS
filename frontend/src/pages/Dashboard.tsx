@@ -12,9 +12,11 @@ const CARDS = [
   { to: '/sales', title: 'Sales', desc: 'History + receipts' },
   { to: '/customers', title: 'Customers', desc: 'Utang ledger + payments' },
   { to: '/suppliers', title: 'Suppliers', desc: 'Suppliers + purchase orders' },
+  { to: '/transfers', title: 'Transfers', desc: 'Move stock between stores' },
   { to: '/expenses', title: 'Expenses', desc: 'Costs + categories' },
   { to: '/reports', title: 'Reports', desc: 'Sales, profit, utang' },
-  { to: '/admin', title: 'Admin', desc: 'Plans, organizations, support' },
+  { to: '/settings', title: 'Settings', desc: 'Store profile + tax' },
+  { to: '/billing', title: 'Billing', desc: 'Plans, usage, upgrades' },
 ];
 
 export default function DashboardPage() {

@@ -82,6 +82,7 @@ def ctx3(client, monkeypatch):
 
     monkeypatch.setattr(subscription_service, "check_limit", _check)
     monkeypatch.setattr(subscription_service, "organization_exists", lambda o: True)
+    monkeypatch.setattr(subscription_service, "clear_request", lambda o: None)
     monkeypatch.setattr(
         subscription_service, "set_plan",
         lambda o, p, provider="manual", status="active": state["sub"].update(

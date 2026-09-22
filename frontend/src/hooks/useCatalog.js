@@ -59,6 +59,16 @@ export function useCustomers() {
         enabled: !!userId,
     });
 }
+/** Sell units (case/bundle alternates). Rarely change; invalidated on unit CRUD. */
+export function useUnits() {
+    const userId = useAuthStore((s) => s.userId);
+    return useQuery({
+        queryKey: [...qk.units, userId ?? 'anon'],
+        queryFn: () => list('/products/units'),
+        staleTime: 5 * 60000,
+        enabled: !!userId,
+    });
+}
 /** Call after any mutation that changes stock (sale, adjust, PO receive). */
 export function useInvalidateInventory() {
     const qc = useQueryClient();

@@ -16,6 +16,8 @@ from app.api.v1.routes import (
     purchase_orders,
     expenses,
     reports,
+    transfers,
+    shifts,
     subscriptions,
     audit,
     notifications,
@@ -32,6 +34,8 @@ api_router.include_router(customers.router, prefix="/customers", tags=["customer
 api_router.include_router(suppliers.router, prefix="/suppliers", tags=["suppliers"])
 api_router.include_router(purchase_orders.router, prefix="/purchase-orders", tags=["purchases"])
 api_router.include_router(expenses.router, prefix="/expenses", tags=["expenses"])
+api_router.include_router(transfers.router, prefix="/transfers", tags=["transfers"])
+api_router.include_router(shifts.router, prefix="/shifts", tags=["shifts"])
 api_router.include_router(reports.router, prefix="/reports", tags=["reports"])
 api_router.include_router(organizations.router, prefix="/organizations", tags=["organizations"])
 api_router.include_router(stores.router, prefix="/stores", tags=["stores"])

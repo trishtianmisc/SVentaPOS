@@ -36,6 +36,7 @@ export default function SalesPage() {
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>('All');
   const [voiding, setVoiding] = useState(false);
   const [voidReason, setVoidReason] = useState('');
+  const [shifts, setShifts] = useState<any[]>([]);
 
   useEffect(() => {
     api
@@ -43,6 +44,10 @@ export default function SalesPage() {
       .then((r) => setSales(r.data.data))
       .catch((e) => setMsg(e.response?.data?.error?.message ?? 'Load failed'))
       .finally(() => setLoading(false));
+    api
+      .get('/shifts')
+      .then((r) => setShifts(r.data.data ?? []))
+      .catch(() => undefined);
   }, []);
 
   const open = async (id: string) => {
@@ -162,7 +167,9 @@ export default function SalesPage() {
                 {(detail.items ?? []).map((i: any) => (
                   <tr key={i.id}>
                     <td className="px-3 py-2 first:pl-0">{i.product_name_snapshot}</td>
-                    <td className="px-3 py-2 text-right">{i.quantity}</td>
+                    <td className="px-3 py-2 text-right">
+                      {i.unit_quantity ?? i.quantity} {i.unit_name ?? 'pc'}
+                    </td>
                     <td className="px-3 py-2 text-right last:pr-0">{formatPHP(i.line_total)}</td>
                   </tr>
                 ))}
@@ -171,6 +178,30 @@ export default function SalesPage() {
                 <span className="text-gray-500">Total</span>
                 <span className="font-semibold">{formatPHP(detail.total)}</span>
               </p>
+              {(detail.tax_amount ?? 0) > 0 && (
+                <>
+                  <p className="flex justify-between text-[13px] text-gray-500">
+                    <span>VATABLE SALES</span>
+                    <span>
+                      {formatPHP(
+                        Math.round(((detail.vatable_amount ?? 0) - detail.tax_amount) * 100) / 100,
+                      )}
+                    </span>
+                  </p>
+                  <p className="flex justify-between text-[13px] text-gray-500">
+                    <span>VAT ({detail.tax_rate ?? 12}%)</span>
+                    <span>{formatPHP(detail.tax_amount)}</span>
+                  </p>
+                  <p className="flex justify-between text-[13px] text-gray-500">
+                    <span>VAT EXEMPT</span>
+                    <span>
+                      {formatPHP(
+                        Math.round((detail.total - (detail.vatable_amount ?? 0)) * 100) / 100,
+                      )}
+                    </span>
+                  </p>
+                </>
+              )}
               {(detail.payments ?? []).map((p: any) => (
                 <p key={p.id} className="flex justify-between text-[13px] text-gray-500">
                   <span className="capitalize">{p.payment_method}</span>
@@ -185,6 +216,64 @@ export default function SalesPage() {
             </>
           ) : (
             <EmptyState title="No receipt selected" hint="Pick a receipt on the left." />
+          )}
+        </Section>
+      </div>
+
+      <div className="mt-4">
+        <Section
+          title="Shifts"
+          action={
+            <span className="text-[13px] text-gray-500">
+              {shifts.length} shift{shifts.length === 1 ? '' : 's'}
+            </span>
+          }
+        >
+          {shifts.length === 0 ? (
+            <p className="py-2 text-sm text-gray-400">
+              No shifts yet — open one from the POS register.
+            </p>
+          ) : (
+            <Table head={['Opened', 'Float', 'Closed', 'Expected', 'Counted', 'Variance']}>
+              {shifts.map((s: any) => (
+                <tr key={s.id}>
+                  <td className="px-3 py-2 first:pl-0">
+                    {new Date(s.opened_at).toLocaleString([], {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </td>
+                  <td className="px-3 py-2 text-right">{formatPHP(s.opening_float ?? 0)}</td>
+                  <td className="px-3 py-2 text-right">
+                    {s.closed_at
+                      ? new Date(s.closed_at).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })
+                      : (
+                        <Badge tone="green">OPEN</Badge>
+                      )}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {s.expected_cash != null ? formatPHP(s.expected_cash) : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {s.counted_cash != null ? formatPHP(s.counted_cash) : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-right last:pr-0">
+                    {s.variance != null ? (
+                      <Badge tone={Number(s.variance) === 0 ? 'green' : 'red'}>
+                        {formatPHP(s.variance)}
+                      </Badge>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </Table>
           )}
         </Section>
       </div>

@@ -3,4 +3,5 @@ export const qk = {
   categories: ['categories'],
   inventory: ['inventory'],
   customers: ['customers'],
+  units: ['units'],
 } as const;

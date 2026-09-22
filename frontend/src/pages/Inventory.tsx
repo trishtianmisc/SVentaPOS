@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api-client';
 import { qk } from '../lib/query-keys';
@@ -30,24 +31,76 @@ export default function InventoryPage() {
   const [productId, setProductId] = useState('');
   const [qty, setQty] = useState('');
   const [reason, setReason] = useState('');
+  const [moveType, setMoveType] = useState('AUTO');
   const [msg, setMsg] = useState('');
   const [moves, setMoves] = useState<any[]>([]);
+  // Forecast: trailing-velocity restock estimates (see /reports/forecast).
+  // Paid-plan feature (advanced_reports); 403 renders an upgrade lock.
+  const [forecast, setForecast] = useState<any>(null);
+  const [forecastLocked, setForecastLocked] = useState(false);
+  const [suppliers, setSuppliers] = useState<any[]>([]);
+  const [poSupplier, setPoSupplier] = useState('');
+  const [poBusy, setPoBusy] = useState('');
 
   useEffect(() => {
     api
       .get('/inventory/movements')
       .then((r) => setMoves((r.data.data ?? []).slice(0, 20)))
       .catch(() => undefined);
+    api
+      .get('/reports/forecast')
+      .then((r) => setForecast(r.data.data))
+      .catch((e: any) => {
+        if (e.response?.status === 403) setForecastLocked(true);
+      });
+    api
+      .get('/suppliers')
+      .then((r) => setSuppliers(r.data.data ?? []))
+      .catch(() => undefined);
   }, []);
 
+  const draftPO = async (row: any) => {
+    if (!poSupplier || !row.suggested_qty) return;
+    setMsg('');
+    setPoBusy(row.product_id);
+    try {
+      await api.post('/purchase-orders', {
+        supplier_id: poSupplier,
+        items: [
+          {
+            product_id: row.product_id,
+            quantity: row.suggested_qty,
+            unit_cost: row.cost_price ?? 0,
+          },
+        ],
+      });
+      toast('success', `PO drafted for ${row.product_name}`);
+    } catch (e: any) {
+      setMsg(e.response?.data?.error?.message ?? 'PO draft failed');
+    } finally {
+      setPoBusy('');
+    }
+  };
+
   const adjustM = useMutation({
-    mutationFn: () =>
-      api.post('/inventory/adjust', {
+    mutationFn: () => {
+      const n = Number(qty);
+      const type =
+        moveType === 'AUTO'
+          ? n >= 0
+            ? 'PURCHASE'
+            : 'ADJUSTMENT'
+          : moveType;
+      // Damage/Expired write-offs must be negative.
+      const signed =
+        (type === 'DAMAGE' || type === 'EXPIRED') && n > 0 ? -n : n;
+      return api.post('/inventory/adjust', {
         product_id: productId,
-        quantity: Number(qty),
-        movement_type: Number(qty) >= 0 ? 'PURCHASE' : 'ADJUSTMENT',
+        quantity: signed,
+        movement_type: type,
         reason: reason.trim(),
-      }),
+      });
+    },
     onSuccess: () => {
       setProductId('');
       setQty('');
@@ -86,6 +139,15 @@ export default function InventoryPage() {
                   onChange={(e) => setQty(e.target.value)}
                   inputMode="decimal"
                 />
+              </Field>
+              <Field label="Type">
+                <Select value={moveType} onChange={(e) => setMoveType(e.target.value)}>
+                  <option value="AUTO">Auto (receive if +, correction if −)</option>
+                  <option value="PURCHASE">Received</option>
+                  <option value="ADJUSTMENT">Correction</option>
+                  <option value="DAMAGE">Damage write-off</option>
+                  <option value="EXPIRED">Expired write-off</option>
+                </Select>
               </Field>
               <Field label="Reason">
                 <TextInput
@@ -162,6 +224,89 @@ export default function InventoryPage() {
                 })}
               </Table>
               <ListFooter count={rows.length} noun="line" />
+            </>
+          )}
+        </Section>
+      </div>
+      <div className="mt-4">
+        <Section
+          title="Restock forecast"
+          action={
+            <span className="text-[13px] text-gray-500">
+              {forecast
+                ? `14-day velocity · as of ${forecast.as_of} · estimates`
+                : 'Loading…'}
+            </span>
+          }
+        >
+          {!forecast || forecast.rows.length === 0 ? (
+            forecastLocked ? (
+              <div className="py-4 text-center">
+                <p className="font-semibold">Restock forecast is a paid feature</p>
+                <p className="mt-1 text-sm text-gray-500">
+                  Upgrade to unlock demand forecasting.
+                </p>
+                <p className="mt-3">
+                  <Link to="/billing" className="font-medium text-primary">
+                    View plans →
+                  </Link>
+                </p>
+              </div>
+            ) : (
+              <p className="py-2 text-sm text-gray-400">
+                No restock signals — nothing is selling faster than its cover, or no
+                sales in the last 14 days.
+              </p>
+            )
+          ) : (
+            <>
+              <Field label="PO supplier" hint="One-click drafts order from this supplier.">
+                <div className="max-w-xs">
+                  <Select value={poSupplier} onChange={(e) => setPoSupplier(e.target.value)}>
+                    <option value="">Select supplier…</option>
+                    {suppliers.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              </Field>
+              <Table head={['Product', 'On hand', 'Sells/day', 'Cover', 'Suggest', '']}>
+                {forecast.rows.slice(0, 20).map((r: any) => (
+                  <tr key={r.product_id}>
+                    <td className="px-3 py-2 first:pl-0">{r.product_name}</td>
+                    <td className="px-3 py-2 text-right">{r.on_hand}</td>
+                    <td className="px-3 py-2 text-right">{r.daily_velocity}</td>
+                    <td className="px-3 py-2 text-right">
+                      {r.days_cover == null ? (
+                        <Badge tone="gray">no sales</Badge>
+                      ) : r.days_cover < 3 ? (
+                        <Badge tone="red">{r.days_cover}d</Badge>
+                      ) : r.days_cover < 7 ? (
+                        <Badge tone="amber">{r.days_cover}d</Badge>
+                      ) : (
+                        <Badge tone="green">{r.days_cover}d</Badge>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {r.suggested_qty > 0 ? r.suggested_qty : '—'}
+                    </td>
+                    <td className="px-3 py-2 text-right last:pr-0">
+                      {r.suggested_qty > 0 && (
+                        <Button
+                          variant="secondary"
+                          disabled={!poSupplier || poBusy === r.product_id}
+                          onClick={() => draftPO(r)}
+                        >
+                          {poBusy === r.product_id ? '…' : 'PO draft'}
+                        </Button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </Table>
+              <ListFooter count={Math.min(forecast.rows.length, 20)} noun="signal" />
             </>
           )}
         </Section>

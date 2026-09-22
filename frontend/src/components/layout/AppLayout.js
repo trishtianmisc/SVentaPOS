@@ -12,9 +12,11 @@ const NAV = [
     { to: '/sales', label: 'Sales' },
     { to: '/customers', label: 'Customers' },
     { to: '/suppliers', label: 'Suppliers' },
+    { to: '/transfers', label: 'Transfers' },
     { to: '/expenses', label: 'Expenses' },
     { to: '/reports', label: 'Reports' },
-    { to: '/admin', label: 'Admin' },
+    { to: '/settings', label: 'Settings' },
+    { to: '/billing', label: 'Billing' },
     { to: '/dashboard', label: 'Dashboard' },
 ];
 // Mobile keeps 5 thumb-friendly tabs; the rest live in Dashboard hub.

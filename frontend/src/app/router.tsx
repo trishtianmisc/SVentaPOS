@@ -4,14 +4,17 @@ import RegisterPage from '../pages/Register';
 import OnboardingPage from '../pages/Onboarding';
 import DashboardPage from '../pages/Dashboard';
 import ProductsPage from '../pages/Products';
+import ProductFormPage from '../pages/ProductForm';
 import InventoryPage from '../pages/Inventory';
 import POSPage from '../pages/POS';
 import SalesPage from '../pages/Sales';
 import CustomersPage from '../pages/Customers';
 import SuppliersPage from '../pages/Suppliers';
 import ExpensesPage from '../pages/Expenses';
+import TransfersPage from '../pages/Transfers';
 import ReportsPage from '../pages/Reports';
-import AdminPage from '../pages/Admin';
+import SettingsPage from '../pages/Settings';
+import BillingPage from '../pages/Billing';
 import AppLayout from '../components/layout/AppLayout';
 import { useAuthStore } from '../stores/auth-store';
 
@@ -33,16 +36,17 @@ function RootRedirect() {
 }
 
 function LoginRoute() {
-  const { userId, initialized } = useAuthStore();
+  const { initialized } = useAuthStore();
+  // Do not bounce on userId alone: mid-login that races Login.tsx and forces
+  // /onboarding before /auth/me can persist ventapos:orgId.
+  // LoginPage resolves an existing session itself after context loads.
   if (!initialized) return <div className="p-6">Loading…</div>;
-  if (userId) return <Navigate to="/onboarding" replace />;
   return <LoginPage />;
 }
 
 function RegisterRoute() {
-  const { userId, initialized } = useAuthStore();
+  const { initialized } = useAuthStore();
   if (!initialized) return <div className="p-6">Loading…</div>;
-  if (userId) return <Navigate to="/onboarding" replace />;
   return <RegisterPage />;
 }
 
@@ -62,13 +66,17 @@ export const router = createBrowserRouter([
         children: [
           { path: '/pos', element: <POSPage /> },
           { path: '/products', element: <ProductsPage /> },
+          { path: '/products/new', element: <ProductFormPage /> },
+          { path: '/products/:productId/edit', element: <ProductFormPage /> },
           { path: '/inventory', element: <InventoryPage /> },
           { path: '/sales', element: <SalesPage /> },
           { path: '/customers', element: <CustomersPage /> },
           { path: '/suppliers', element: <SuppliersPage /> },
           { path: '/expenses', element: <ExpensesPage /> },
+          { path: '/transfers', element: <TransfersPage /> },
           { path: '/reports', element: <ReportsPage /> },
-          { path: '/admin', element: <AdminPage /> },
+          { path: '/settings', element: <SettingsPage /> },
+          { path: '/billing', element: <BillingPage /> },
           { path: '/dashboard', element: <DashboardPage /> },
         ],
       },

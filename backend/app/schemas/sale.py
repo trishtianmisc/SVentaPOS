@@ -1,4 +1,5 @@
-"""Sale schemas. Server computes all totals; tax defaults to 0."""
+"""Sale schemas. Server computes all totals; VAT-inclusive (Phase 6):
+shelf prices are tax-inclusive and tax_amount is carved out of the total."""
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -8,6 +9,9 @@ class SaleItemIn(BaseModel):
     product_id: UUID
     quantity: float = Field(gt=0)
     discount: float = Field(default=0, ge=0)
+    # Optional sell unit (e.g. "case"); line qty is in this unit and the
+    # server converts to base units for stock + wholesale tier.
+    unit_name: str | None = Field(default=None, max_length=32)
 
 
 class SalePaymentIn(BaseModel):
@@ -32,6 +36,8 @@ class SaleRead(BaseModel):
     subtotal: float
     discount_amount: float
     tax_amount: float
+    tax_rate: float = 0
+    vatable_amount: float = 0
     total: float
     paid: float | None = None
     change: float | None = None
@@ -48,6 +54,8 @@ class SaleDetail(BaseModel):
     subtotal: float
     discount_amount: float
     tax_amount: float
+    tax_rate: float = 0
+    vatable_amount: float = 0
     total: float
     status: str
     created_at: str

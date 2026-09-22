@@ -1,5 +1,5 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { create } from 'zustand';
 export function Button({ variant = 'primary', size = 'normal', className = '', ...props }) {
     const heights = { compact: 'h-9', normal: 'h-10', large: 'h-12' };
@@ -12,11 +12,18 @@ export function Button({ variant = 'primary', size = 'normal', className = '', .
     return (_jsx("button", { className: `rounded-lg px-4 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40 ${heights[size]} ${styles[variant]} ${className}`, ...props }));
 }
 export function Field({ label, hint, error, children }) {
-    return (_jsxs("label", { className: "block", children: [_jsx("span", { className: "mb-1 block text-[13px] font-medium text-gray-700", children: label }), children, hint && !error && _jsx("span", { className: "mt-1 block text-xs text-gray-400", children: hint }), error && _jsx("span", { className: "mt-1 block text-xs text-red-600", children: error })] }));
+    return (_jsxs("label", { className: "block", children: [_jsx("span", { className: "mb-1.5 block text-sm font-medium text-gray-700", children: label }), children, hint && !error && _jsx("span", { className: "mt-1.5 block text-xs text-gray-400", children: hint }), error && _jsx("span", { className: "mt-1.5 block text-xs text-red-600", children: error })] }));
 }
 const inputCls = 'h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary';
 export function TextInput(props) {
     return _jsx("input", { ...props, className: `${inputCls} ${props.className ?? ''}` });
+}
+export function PasswordInput({ className = '', ...props }) {
+    const [show, setShow] = useState(false);
+    return (_jsxs("span", { className: "relative block", children: [_jsx("input", { ...props, type: show ? 'text' : 'password', className: `${inputCls} pr-10 ${className}` }), _jsx("button", { type: "button", "aria-label": show ? 'Hide password' : 'Show password', onClick: (e) => {
+                    e.preventDefault();
+                    setShow((v) => !v);
+                }, className: "absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-1 focus:ring-primary", children: show ? (_jsxs("svg", { width: "16", height: "16", viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", "aria-hidden": "true", children: [_jsx("path", { d: "M2 2l12 12" }), _jsx("path", { d: "M6.4 6.4a2 2 0 002.8 2.8" }), _jsx("path", { d: "M4.1 4.1C2.7 5 1.7 6.4 1 8c1.4 2.7 4 4.5 7 4.5 1.1 0 2.2-.2 3.2-.7" }), _jsx("path", { d: "M6.6 3.7c.5-.1 1-.2 1.4-.2 3 0 5.6 1.8 7 4.5-.4.8-1 1.6-1.7 2.3" })] })) : (_jsxs("svg", { width: "16", height: "16", viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", "aria-hidden": "true", children: [_jsx("path", { d: "M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z" }), _jsx("circle", { cx: "8", cy: "8", r: "2" })] })) })] }));
 }
 export function Select(props) {
     return _jsx("select", { ...props, className: `${inputCls} ${props.className ?? ''}` });
@@ -77,11 +84,23 @@ export function toast(kind, text) {
         useToastStore.setState((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
     }, 4000);
 }
+function BrandMark({ tone = 'onDark' }) {
+    const tones = {
+        onDark: 'bg-white/15 text-white',
+        onLight: 'bg-primary-soft text-primary',
+    };
+    return (_jsx("span", { "aria-hidden": "true", className: `inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${tones[tone]}`, children: _jsxs("svg", { width: "18", height: "18", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [_jsx("path", { d: "M5 7h14l-1.4 13H6.4L5 7Z" }), _jsx("path", { d: "M9 7V6a3 3 0 0 1 6 0v1" })] }) }));
+}
 export function AuthShell({ title, sub, children, }) {
     useEffect(() => {
         document.title = `${title} — VentaPOS`;
     }, [title]);
-    return (_jsx("div", { className: "flex min-h-dvh items-center justify-center bg-gray-50 p-4", children: _jsxs("div", { className: "w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-6 shadow-sm", children: [_jsx("h1", { className: "text-xl font-semibold text-primary-ink", children: "VentaPOS" }), _jsx("p", { className: "mt-1 text-xl font-semibold", children: title }), _jsx("p", { className: "mt-1 text-[13px] text-gray-500", children: sub }), _jsx("div", { className: "mt-4", children: children }), _jsx(ToastHost, {})] }) }));
+    const perks = [
+        'Ring up sales in seconds with a touch-first checkout.',
+        'Track inventory and staff across every store.',
+        'Live reports so you always know where you stand.',
+    ];
+    return (_jsxs("div", { className: "flex min-h-dvh bg-gray-50", children: [_jsxs("aside", { className: "relative hidden w-1/2 flex-col justify-between overflow-hidden bg-gradient-to-br from-primary via-primary-hover to-[#312e81] p-12 text-white lg:flex", children: [_jsx("div", { "aria-hidden": "true", className: "pointer-events-none absolute -right-20 -top-24 h-64 w-64 rounded-full bg-white/10" }), _jsx("div", { "aria-hidden": "true", className: "pointer-events-none absolute -bottom-28 -left-20 h-72 w-72 rounded-full bg-white/5" }), _jsxs("div", { className: "relative flex items-center gap-2.5", children: [_jsx(BrandMark, {}), _jsx("span", { className: "text-base font-semibold tracking-tight", children: "VentaPOS" })] }), _jsxs("div", { className: "relative max-w-md space-y-7", children: [_jsx("h2", { className: "text-[28px] font-semibold leading-[1.25] tracking-[-0.02em]", children: "The point of sale that keeps your store moving." }), _jsx("ul", { className: "space-y-4 text-[15px] leading-relaxed text-white/80", children: perks.map((item) => (_jsxs("li", { className: "flex gap-3", children: [_jsxs("svg", { width: "18", height: "18", viewBox: "0 0 20 20", fill: "none", className: "mt-0.5 shrink-0", "aria-hidden": "true", children: [_jsx("circle", { cx: "10", cy: "10", r: "9", fill: "currentColor", fillOpacity: "0.2" }), _jsx("path", { d: "M6 10.2l2.4 2.4L14 7.5", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" })] }), _jsx("span", { children: item })] }, item))) })] }), _jsxs("p", { className: "relative text-xs text-white/50", children: ["\u00A9 ", new Date().getFullYear(), " VentaPOS"] })] }), _jsx("main", { className: "flex flex-1 items-center justify-center p-4 sm:p-6", children: _jsxs("div", { className: "w-full max-w-md rounded-xl border border-gray-200 bg-white p-6 shadow-sm sm:p-8", children: [_jsxs("div", { className: "mb-6 flex items-center gap-2.5 lg:hidden", children: [_jsx(BrandMark, { tone: "onLight" }), _jsx("span", { className: "font-semibold tracking-tight text-primary-ink", children: "VentaPOS" })] }), _jsx("h1", { className: "text-2xl font-semibold tracking-tight", children: title }), _jsx("p", { className: "mt-1.5 text-sm text-gray-500", children: sub }), _jsx("div", { className: "mt-6", children: children }), _jsx(ToastHost, {})] }) })] }));
 }
 export function ToastHost() {
     const toasts = useToastStore((s) => s.toasts);

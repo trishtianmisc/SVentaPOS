@@ -37,8 +37,8 @@ def get_product(org_id: str, product_id: str) -> dict:
 def create_product(org_id: str, data: dict) -> dict:
     sb = _sb()
     payload = {"organization_id": org_id, **data}
-    # Normalize empty strings to null for unique-able fields.
-    for f in ("sku", "barcode"):
+    # Normalize empty strings to null for unique-able / optional fields.
+    for f in ("sku", "barcode", "brand", "image_path"):
         if payload.get(f) == "":
             payload[f] = None
     try:
@@ -60,12 +60,15 @@ def update_product(org_id: str, product_id: str, patch: dict) -> dict:
         "category_id", "name", "sku", "barcode", "brand", "cost_price",
         "retail_price", "wholesale_price", "wholesale_min_qty",
         "minimum_stock", "reorder_level", "track_inventory", "active",
+        "vat_exempt", "image_path",
     )
     clean = {k: v for k, v in patch.items() if k in allowed and v is not None}
     if "sku" in clean and clean["sku"] == "":
         clean["sku"] = None
     if "barcode" in clean and clean["barcode"] == "":
         clean["barcode"] = None
+    if "image_path" in clean and clean["image_path"] == "":
+        clean["image_path"] = None
     if not clean:
         return get_product(org_id, product_id)
     try:
@@ -88,3 +91,66 @@ def update_product(org_id: str, product_id: str, patch: dict) -> dict:
 
 def deactivate_product(org_id: str, product_id: str) -> dict:
     return update_product(org_id, product_id, {"active": False})
+
+
+# Sell units (Phase 4 C1): alternates to the implicit base ('pc') unit. ----
+
+
+def list_all_units(org_id: str) -> list[dict]:
+    sb = _sb()
+    pids = [p["id"] for p in
+            (sb.table("products").select("id").eq("organization_id", org_id)
+             .execute().data or [])]
+    if not pids:
+        return []
+    res = (sb.table("product_units").select("*").in_("product_id", pids)
+           .order("conversion_factor").execute())
+    return res.data or []
+
+
+def list_units(org_id: str, product_id: str) -> list[dict]:
+    get_product(org_id, product_id)  # validates tenancy
+    sb = _sb()
+    res = (sb.table("product_units").select("*")
+           .eq("product_id", product_id).order("conversion_factor")
+           .execute())
+    return res.data or []
+
+
+def create_unit(org_id: str, product_id: str, data: dict) -> dict:
+    get_product(org_id, product_id)  # validates tenancy
+    name = (data.get("unit_name") or "").strip()
+    if not name:
+        from app.core.exceptions import ValidationAppError
+
+        raise ValidationAppError("Unit name required")
+    if name.lower() == "pc":
+        from app.core.exceptions import ValidationAppError
+
+        raise ValidationAppError("'pc' is the implicit base unit")
+    sb = _sb()
+    try:
+        res = sb.table("product_units").insert({
+            "product_id": product_id, "unit_name": name,
+            "conversion_factor": data["conversion_factor"],
+            "selling_price": data.get("selling_price"),
+            "cost_price": data.get("cost_price"),
+            "barcode": data.get("barcode") or None}).execute()
+    except Exception as e:
+        msg = str(e).lower()
+        if "duplicate" in msg or "unique" in msg:
+            raise ConflictError("Unit already exists for this product")
+        raise
+    rows = res.data or []
+    if not rows:
+        raise ConflictError("Unit could not be created")
+    return rows[0]
+
+
+def delete_unit(org_id: str, product_id: str, unit_id: str) -> None:
+    get_product(org_id, product_id)  # validates tenancy
+    sb = _sb()
+    res = (sb.table("product_units").delete()
+           .eq("id", unit_id).eq("product_id", product_id).execute())
+    if not (res.data or []):
+        raise NotFoundError("Unit not found")

@@ -8,9 +8,20 @@ export interface Product {
   id: string;
   name: string;
   retail_price: number;
+  cost_price?: number;
+  wholesale_price?: number | null;
+  wholesale_min_qty?: number | null;
   barcode?: string | null;
+  sku?: string | null;
+  brand?: string | null;
   track_inventory: boolean;
   category_id?: string | null;
+  vat_exempt?: boolean;
+  minimum_stock?: number;
+  reorder_level?: number;
+  image_path?: string | null;
+  active?: boolean;
+  created_at?: string | null;
 }
 export interface Category {
   id: string;
@@ -27,6 +38,13 @@ export interface Customer {
   id: string;
   name: string;
   balance?: number;
+}
+export interface SellUnit {
+  id: string;
+  product_id: string;
+  unit_name: string;
+  conversion_factor: number;
+  selling_price?: number | null;
 }
 
 const list = (path: string) => api.get(path).then((r) => r.data.data ?? []);
@@ -86,6 +104,17 @@ export function useCustomers() {
     queryKey: [...qk.customers, userId ?? 'anon'],
     queryFn: () => list('/customers'),
     staleTime: 2 * 60_000,
+    enabled: !!userId,
+  });
+}
+
+/** Sell units (case/bundle alternates). Rarely change; invalidated on unit CRUD. */
+export function useUnits() {
+  const userId = useAuthStore((s) => s.userId);
+  return useQuery<SellUnit[]>({
+    queryKey: [...qk.units, userId ?? 'anon'],
+    queryFn: () => list('/products/units'),
+    staleTime: 5 * 60_000,
     enabled: !!userId,
   });
 }

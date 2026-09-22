@@ -10,10 +10,10 @@ from app.api.v1.dependencies import (
     get_current_user,
     require_role,
 )
-from app.core.exceptions import ForbiddenError
+from app.core.exceptions import ConflictError, ForbiddenError
 from app.schemas.common import SuccessResponse
 from app.schemas.sale import SaleCreate, SaleDetail, SaleRead, SaleVoid
-from app.services import audit_service, notification_service, sale_service
+from app.services import audit_service, notification_service, sale_service, shift_service
 
 router = APIRouter()
 POS_ROLES = ["owner", "manager", "cashier"]
@@ -34,6 +34,9 @@ def create_sale(
     user: CurrentUser = Depends(get_current_user),
 ):
     o, s = _ctx(org_id, store)
+    # Hard shift gate (Phase 4): no open shift, no sale.
+    if not shift_service.current(o, s):
+        raise ConflictError("No open shift — open a shift to start selling")
     result = sale_service.complete_sale(
         o, s, str(user.id),
         [i.model_dump(mode="json") for i in body.items],

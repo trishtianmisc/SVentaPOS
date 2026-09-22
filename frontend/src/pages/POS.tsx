@@ -4,20 +4,24 @@ import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api-client';
 import { qk } from '../lib/query-keys';
 import { formatPHP } from '../utils/currency';
-import { Badge } from '../components/ui';
+import { Badge, toast } from '../components/ui';
 import { useSessionStore } from '../stores/session';
 import {
   useCategories,
   useCustomers,
   useInventory,
   useProducts,
+  useUnits,
   type Product,
+  type SellUnit,
 } from '../hooks/useCatalog';
 
 interface CartLine {
   product: Product;
   qty: number;
   discount: number;
+  /** Sell unit; 'pc' is the implicit base unit. Line qty is in this unit. */
+  unit: string;
 }
 interface Receipt {
   receipt_number: string;
@@ -25,6 +29,9 @@ interface Receipt {
   paid: number;
   change: number;
   status: string;
+  tax_amount?: number;
+  tax_rate?: number;
+  vatable_amount?: number;
 }
 
 const METHODS = ['cash', 'gcash', 'maya', 'card', 'bank', 'other', 'utang'] as const;
@@ -59,6 +66,27 @@ function isWholesale(p: Product, qty: number) {
   return w != null && m != null && qty >= m;
 }
 
+/** Factor converting a line's sell unit to base units ('pc' = 1). */
+function lineFactor(l: CartLine, units: SellUnit[] | undefined) {
+  if (l.unit === 'pc') return 1;
+  return Number(units?.find((u) => u.unit_name === l.unit)?.conversion_factor ?? 1);
+}
+
+/** Client mirror of the server unit price (server stays authoritative):
+ * explicit unit price wins, else tiered base price × factor. Tier triggers
+ * on base-unit quantity. */
+function linePrice(l: CartLine, units: SellUnit[] | undefined) {
+  const f = lineFactor(l, units);
+  const base = unitPrice(l.product, l.qty * f);
+  if (l.unit === 'pc') return base;
+  const sp = units?.find((u) => u.unit_name === l.unit)?.selling_price;
+  return sp != null ? Number(sp) : Math.round(base * f * 100) / 100;
+}
+
+function lineIsWholesale(l: CartLine, units: SellUnit[] | undefined) {
+  return isWholesale(l.product, l.qty * lineFactor(l, units));
+}
+
 export default function POSPage() {
   const qc = useQueryClient();
   // Shared cached queries: mount any number of times (incl. StrictMode
@@ -68,6 +96,12 @@ export default function POSPage() {
   const categoriesQ = useCategories();
   const inventoryQ = useInventory();
   const customersQ = useCustomers();
+  const unitsQ = useUnits();
+  const unitsByProduct = useMemo(() => {
+    const m: Record<string, SellUnit[]> = {};
+    for (const u of unitsQ.data ?? []) (m[u.product_id] ??= []).push(u);
+    return m;
+  }, [unitsQ.data]);
 
   const products = productsQ.data ?? [];
   const categories = categoriesQ.data ?? [];
@@ -101,9 +135,43 @@ export default function POSPage() {
   const [discVal, setDiscVal] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
 
+  // Shift gate (Phase 4): checkout requires an open shift.
+  const [shift, setShift] = useState<any>(null);
+  const [shiftLoading, setShiftLoading] = useState(true);
+  const [openFloat, setOpenFloat] = useState('');
+  const [showClose, setShowClose] = useState(false);
+  const [closeCash, setCloseCash] = useState('');
+  const [closeNotes, setCloseNotes] = useState('');
+  const [zReport, setZReport] = useState<any>(null);
+  const [shiftBusy, setShiftBusy] = useState(false);
+
+  const loadShift = async () => {
+    setShiftLoading(true);
+    try {
+      const res = await api.get('/shifts/current');
+      setShift(res.data.data ?? null);
+    } catch {
+      setShift(null);
+    } finally {
+      setShiftLoading(false);
+    }
+  };
+
   // Cart marker lets the store picker confirm before clearing (prices and
   // stock differ between stores). Cleared whenever the active store changes.
   const storeVersion = useSessionStore((s) => s.storeVersion);
+  const storeId = useSessionStore((s) => s.storeId);
+  // Store profile for the receipt header (name/address/TIN) + VAT flag.
+  const [storeInfo, setStoreInfo] = useState<any>(null);
+  useEffect(() => {
+    api
+      .get('/stores')
+      .then((r) => {
+        const list = r.data.data ?? [];
+        setStoreInfo(list.find((s: any) => s.id === storeId) ?? list[0] ?? null);
+      })
+      .catch(() => undefined);
+  }, [storeId, storeVersion]);
   const count = cart.reduce((s, l) => s + l.qty, 0);
   useEffect(() => {
     localStorage.setItem('ventapos:cartCount', String(count));
@@ -111,6 +179,12 @@ export default function POSPage() {
   const firstVersion = useRef(storeVersion);
   useEffect(() => {
     if (storeVersion !== firstVersion.current) setCart([]);
+  }, [storeVersion]);
+  useEffect(() => {
+    loadShift();
+    setZReport(null);
+    setShowClose(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeVersion]);
   useEffect(() => {
     if (!receipt) return;
@@ -150,17 +224,26 @@ export default function POSPage() {
     );
   };
 
-  const setQty = (id: string, qty: number) => {
+  const setQty = (id: string, qty: number, unit?: string) => {
     setCart((c) => {
       const line = c.find((l) => l.product.id === id);
       if (!line) return c;
-      if (qty <= 0) return c.filter((l) => l.product.id !== id);
-      const max = line.product.track_inventory ? (stock[id]?.qty ?? 0) : Infinity;
+      const u = unit ?? line.unit;
+      if (qty <= 0)
+        return u === line.unit ? c.filter((l) => l.product.id !== id) : c;
+      const f =
+        u === 'pc'
+          ? 1
+          : Number(
+              unitsByProduct[id]?.find((x) => x.unit_name === u)
+                ?.conversion_factor ?? 1,
+            );
+      const max = line.product.track_inventory ? (stock[id]?.qty ?? 0) / f : Infinity;
       if (qty > max) {
-        setMsg(`Only ${max} left in stock`);
+        setMsg(`Only ${max} ${u} left in stock`);
         return c;
       }
-      return c.map((l) => (l.product.id === id ? { ...l, qty } : l));
+      return c.map((l) => (l.product.id === id ? { ...l, qty, unit: u } : l));
     });
   };
 
@@ -168,7 +251,7 @@ export default function POSPage() {
     if (outOfStock(p)) return;
     const line = cart.find((l) => l.product.id === p.id);
     setQty(p.id, line ? line.qty + 1 : 1);
-    if (!line) setCart((c) => [...c, { product: p, qty: 1, discount: 0 }]);
+    if (!line) setCart((c) => [...c, { product: p, qty: 1, discount: 0, unit: 'pc' }]);
   };
 
   const clearCart = () => {
@@ -196,11 +279,14 @@ export default function POSPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [products, cat, query, inStockOnly, inventoryQ.data]);
 
-  const subtotal = cart.reduce((s, l) => s + unitPrice(l.product, l.qty) * l.qty, 0);
-  const lineDisc = cart.reduce(
-    (s, l) => s + Math.min(l.discount, unitPrice(l.product, l.qty) * l.qty),
+  const subtotal = cart.reduce(
+    (s, l) => s + linePrice(l, unitsByProduct[l.product.id]) * l.qty,
     0,
   );
+  const lineDisc = cart.reduce((s, l) => {
+    const gross = linePrice(l, unitsByProduct[l.product.id]) * l.qty;
+    return s + Math.min(l.discount, gross);
+  }, 0);
   const estimate = Math.max(0, Math.round((subtotal - lineDisc) * 100) / 100);
 
   const pickMethod = (m: (typeof METHODS)[number]) => {
@@ -220,11 +306,57 @@ export default function POSPage() {
   };
 
   const canCharge =
+    !!shift &&
     cart.length > 0 &&
     (method === 'utang'
       ? !!customerId
       : method !== 'cash' || Number(tendered) >= estimate);
   canChargeRef.current = canCharge;
+
+  const openShift = async () => {
+    setMsg('');
+    setShiftBusy(true);
+    try {
+      const res = await api.post('/shifts/open', {
+        opening_float: Number(openFloat) || 0,
+      });
+      setShift(res.data.data);
+      setOpenFloat('');
+      toast('success', 'Shift opened');
+    } catch (e: any) {
+      setMsg(e.response?.data?.error?.message ?? 'Could not open shift');
+      await loadShift();
+    } finally {
+      setShiftBusy(false);
+    }
+  };
+
+  const closeShift = async () => {
+    if (!shift) return;
+    setMsg('');
+    setShiftBusy(true);
+    try {
+      const res = await api.post(`/shifts/${shift.id}/close`, {
+        counted_cash: Number(closeCash) || 0,
+        notes: closeNotes.trim() || undefined,
+      });
+      setShift(null);
+      setZReport(res.data.data);
+      setShowClose(false);
+      setCloseCash('');
+      setCloseNotes('');
+      toast(
+        'success',
+        Number(res.data.data.variance) === 0
+          ? 'Shift closed — cash exact'
+          : `Shift closed — variance ${formatPHP(res.data.data.variance)}`,
+      );
+    } catch (e: any) {
+      setMsg(e.response?.data?.error?.message ?? 'Could not close shift');
+    } finally {
+      setShiftBusy(false);
+    }
+  };
 
   const checkout = async (override = false, reason = '', key = crypto.randomUUID()) => {
     setMsg('');
@@ -244,6 +376,7 @@ export default function POSPage() {
           product_id: l.product.id,
           quantity: l.qty,
           discount: l.discount,
+          ...(l.unit !== 'pc' ? { unit_name: l.unit } : {}),
         })),
         payments: [
           {
@@ -285,6 +418,7 @@ export default function POSPage() {
         }
       }
       setMsg(errMsg);
+      if (errMsg.toLowerCase().includes('shift')) await loadShift();
     } finally {
       setCharging(false);
     }
@@ -305,6 +439,53 @@ export default function POSPage() {
       {loadError && (
         <p className="text-sm text-red-600">Could not load catalog. Check connection and retry.</p>
       )}
+
+      {/* Shift bar: hard gate — checkout requires an open shift. */}
+      <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2">
+        {shiftLoading ? (
+          <span className="text-sm text-gray-500">Checking shift…</span>
+        ) : shift ? (
+          <>
+            <Badge tone="green">Shift open</Badge>
+            <span className="text-sm text-gray-600">
+              Float {formatPHP(Number(shift.opening_float) || 0)} · since{' '}
+              {new Date(shift.opened_at).toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowClose(true)}
+              className="ml-auto h-9 rounded-lg border border-gray-300 px-3 text-sm font-medium text-gray-700 hover:bg-gray-100"
+            >
+              Close shift
+            </button>
+          </>
+        ) : (
+          <>
+            <Badge tone="amber">No open shift</Badge>
+            <span className="text-sm text-gray-600">Open a shift to start selling.</span>
+            <input
+              aria-label="Opening float"
+              className="ml-auto h-9 w-28 rounded-lg border border-gray-300 px-2 text-sm"
+              placeholder="Float ₱"
+              inputMode="decimal"
+              value={openFloat}
+              onChange={(e) => setOpenFloat(e.target.value)}
+            />
+            <button
+              type="button"
+              disabled={shiftBusy}
+              onClick={openShift}
+              className="h-9 rounded-lg bg-primary px-4 text-sm font-medium text-white disabled:opacity-40"
+            >
+              {shiftBusy ? 'Opening…' : 'Open shift'}
+            </button>
+          </>
+        )}
+      </div>
+      {msg && <p className="mt-2 text-[13px] text-red-600">{msg}</p>}
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_380px]">
         {/* Catalog */}
@@ -529,15 +710,21 @@ export default function POSPage() {
 
             <ul className="mt-2 max-h-64 divide-y divide-gray-100 overflow-auto">
               {cart.map((l) => {
-                const ws = isWholesale(l.product, l.qty);
-                const max = l.product.track_inventory ? (stock[l.product.id]?.qty ?? 0) : Infinity;
+                const units = unitsByProduct[l.product.id] ?? [];
+                const price = linePrice(l, units);
+                const gross = price * l.qty;
+                const ws = lineIsWholesale(l, units);
+                const f = lineFactor(l, units);
+                const max = l.product.track_inventory
+                  ? (stock[l.product.id]?.qty ?? 0) / f
+                  : Infinity;
                 return (
                   <li key={l.product.id} className="py-3">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium">{l.product.name}</p>
                         <p className="text-xs text-gray-500">
-                          {formatPHP(unitPrice(l.product, l.qty))} each
+                          {formatPHP(price)} per {l.unit}
                           {ws && (
                             <span className="ml-1 rounded-full bg-primary-soft px-1.5 py-0.5 text-[11px] font-semibold text-primary-ink">
                               Wholesale
@@ -546,21 +733,38 @@ export default function POSPage() {
                         </p>
                       </div>
                       <p className="text-sm font-semibold">
-                        {formatPHP(unitPrice(l.product, l.qty) * l.qty - Math.min(l.discount, unitPrice(l.product, l.qty) * l.qty))}
+                        {formatPHP(gross - Math.min(l.discount, gross))}
                       </p>
                     </div>
                     <div className="mt-1 flex items-center justify-between">
-                      <span className="inline-flex items-center rounded-full border border-gray-200">
-                        <button aria-label={`Decrease ${l.product.name}`} className="px-2.5 py-1" onClick={() => setQty(l.product.id, l.qty - 1)}>
-                          −
-                        </button>
-                        <span className="min-w-10 text-center text-sm font-bold">
-                          {l.qty}
-                          <span className="font-normal text-gray-400"> pcs</span>
+                      <span className="inline-flex items-center gap-1">
+                        <span className="inline-flex items-center rounded-full border border-gray-200">
+                          <button aria-label={`Decrease ${l.product.name}`} className="px-2.5 py-1" onClick={() => setQty(l.product.id, l.qty - 1)}>
+                            −
+                          </button>
+                          <span className="min-w-10 text-center text-sm font-bold">
+                            {l.qty}
+                            <span className="font-normal text-gray-400"> {l.unit}</span>
+                          </span>
+                          <button aria-label={`Increase ${l.product.name}`} className="px-2.5 py-1" onClick={() => add(l.product)}>
+                            +
+                          </button>
                         </span>
-                        <button aria-label={`Increase ${l.product.name}`} className="px-2.5 py-1" onClick={() => add(l.product)}>
-                          +
-                        </button>
+                        {units.length > 0 && (
+                          <select
+                            aria-label={`Unit for ${l.product.name}`}
+                            className="h-8 rounded-lg border border-gray-200 bg-white px-1 text-xs"
+                            value={l.unit}
+                            onChange={(e) => setQty(l.product.id, l.qty, e.target.value)}
+                          >
+                            <option value="pc">pc</option>
+                            {units.map((u) => (
+                              <option key={u.id} value={u.unit_name}>
+                                {u.unit_name}
+                              </option>
+                            ))}
+                          </select>
+                        )}
                       </span>
                       {discFor === l.product.id ? (
                         <span className="inline-flex items-center gap-1">
@@ -607,7 +811,7 @@ export default function POSPage() {
                       )}
                     </div>
                     {l.qty >= max && max !== Infinity && (
-                      <p className="mt-1 text-xs text-amber-700">Only {max} pcs in stock</p>
+                      <p className="mt-1 text-xs text-amber-700">Only {max} {l.unit} in stock</p>
                     )}
                   </li>
                 );
@@ -744,6 +948,123 @@ export default function POSPage() {
         </button>
       )}
 
+      {/* Close-shift modal */}
+      {showClose && shift && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Close shift"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"
+        >
+          <div className="w-full max-w-sm rounded-t-2xl bg-white p-6 sm:rounded-2xl">
+            <p className="font-bold">Close shift</p>
+            <p className="mt-1 text-sm text-gray-500">
+              Count the cash drawer and enter the total.
+            </p>
+            <label className="mt-3 block text-[13px] font-medium text-gray-600">
+              Counted cash
+              <input
+                className="mt-1 h-11 w-full rounded-lg border border-gray-300 px-3 text-sm"
+                placeholder="₱"
+                inputMode="decimal"
+                value={closeCash}
+                onChange={(e) => setCloseCash(e.target.value)}
+              />
+            </label>
+            <label className="mt-3 block text-[13px] font-medium text-gray-600">
+              Notes (optional)
+              <input
+                className="mt-1 h-11 w-full rounded-lg border border-gray-300 px-3 text-sm"
+                placeholder="e.g. handed over to Aling Maria"
+                value={closeNotes}
+                onChange={(e) => setCloseNotes(e.target.value)}
+              />
+            </label>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button
+                className="h-10 rounded-lg border border-gray-300 text-sm font-medium"
+                onClick={() => setShowClose(false)}
+              >
+                Back
+              </button>
+              <button
+                className="h-10 rounded-lg bg-primary text-sm font-medium text-white disabled:opacity-40"
+                disabled={shiftBusy || !closeCash}
+                onClick={closeShift}
+              >
+                {shiftBusy ? 'Closing…' : 'Close + Z-report'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Z-report modal */}
+      {zReport && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Z-report"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"
+        >
+          <div className="w-full max-w-sm rounded-t-2xl bg-white p-6 sm:rounded-2xl">
+            <p className="text-center font-bold">Z-Report</p>
+            <p className="text-center text-sm text-gray-500">
+              {zReport.z_report?.sales_count ?? 0} sales · Revenue{' '}
+              {formatPHP(zReport.z_report?.revenue ?? 0)}
+            </p>
+            <hr />
+            {(zReport.z_report?.by_method ?? []).map((m: any) => (
+              <p key={m.method} className="flex justify-between py-1 text-sm">
+                <span className="capitalize">{m.method}</span>
+                <span>{formatPHP(m.total)}</span>
+              </p>
+            ))}
+            <hr />
+            <div className="mt-2 space-y-1 text-sm">
+              {(zReport.z_report?.vat_collected ?? 0) > 0 && (
+                <p className="flex justify-between">
+                  <span>VAT collected</span>
+                  <span>{formatPHP(zReport.z_report?.vat_collected ?? 0)}</span>
+                </p>
+              )}
+              <p className="flex justify-between">
+                <span>Opening float</span>
+                <span>{formatPHP(zReport.z_report?.opening_float ?? 0)}</span>
+              </p>
+              <p className="flex justify-between">
+                <span>Cash tendered</span>
+                <span>{formatPHP(zReport.z_report?.cash_tendered ?? 0)}</span>
+              </p>
+              <p className="flex justify-between">
+                <span>Change given</span>
+                <span>{formatPHP(zReport.z_report?.change_given ?? 0)}</span>
+              </p>
+              <p className="flex justify-between">
+                <span>Expected cash</span>
+                <span className="font-bold">{formatPHP(zReport.expected_cash ?? 0)}</span>
+              </p>
+              <p className="flex justify-between">
+                <span>Counted cash</span>
+                <span className="font-bold">{formatPHP(zReport.counted_cash ?? 0)}</span>
+              </p>
+              <p className="flex justify-between">
+                <span>Variance</span>
+                <Badge tone={Number(zReport.variance) === 0 ? 'green' : 'red'}>
+                  {formatPHP(Number(zReport.variance) || 0)}
+                </Badge>
+              </p>
+            </div>
+            <button
+              className="mt-4 h-10 w-full rounded-lg bg-primary text-sm font-medium text-white"
+              onClick={() => setZReport(null)}
+            >
+              Done — open a new shift to continue
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Receipt modal */}
       {receipt && (
         <div
@@ -755,6 +1076,13 @@ export default function POSPage() {
           <div className="receipt-80 w-full max-w-sm rounded-t-2xl bg-white p-6 sm:rounded-2xl print:max-w-none print:rounded-none print:p-0 print:shadow-none">
             <p className="text-center font-bold">VentaPOS</p>
             <p className="text-center">{receipt.receipt_number}</p>
+            {storeInfo && (
+              <p className="text-center text-gray-500">
+                {storeInfo.name}
+                {storeInfo.address ? ` · ${storeInfo.address}` : ''}
+                {storeInfo.tin ? ` · TIN ${storeInfo.tin}` : ''}
+              </p>
+            )}
             <p className="text-center text-gray-500">
               {new Date().toLocaleString()} · {method.toUpperCase()}
             </p>
@@ -762,13 +1090,38 @@ export default function POSPage() {
             {receiptLines.map((i: any) => (
               <p key={i.id} className="flex justify-between">
                 <span>
-                  {i.product_name_snapshot} × {i.quantity}
+                  {i.product_name_snapshot} × {i.unit_quantity ?? i.quantity}{' '}
+                  {i.unit_name ?? 'pc'}
                 </span>
                 <span>{formatPHP(i.line_total)}</span>
               </p>
             ))}
             <hr />
             <div className="mt-4 space-y-1 text-sm print:mt-0">
+              {(receipt.tax_amount ?? 0) > 0 && (
+                <>
+                  <p className="flex justify-between text-gray-500">
+                    <span>VATABLE SALES</span>
+                    <span>
+                      {formatPHP(
+                        Math.round(((receipt.vatable_amount ?? 0) - (receipt.tax_amount ?? 0)) * 100) / 100,
+                      )}
+                    </span>
+                  </p>
+                  <p className="flex justify-between text-gray-500">
+                    <span>VAT ({receipt.tax_rate ?? 12}%)</span>
+                    <span>{formatPHP(receipt.tax_amount ?? 0)}</span>
+                  </p>
+                  <p className="flex justify-between text-gray-500">
+                    <span>VAT EXEMPT</span>
+                    <span>
+                      {formatPHP(
+                        Math.round((receipt.total - (receipt.vatable_amount ?? 0)) * 100) / 100,
+                      )}
+                    </span>
+                  </p>
+                </>
+              )}
               <p className="flex justify-between">
                 <span>Total</span>
                 <span className="font-bold">{formatPHP(receipt.total)}</span>

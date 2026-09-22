@@ -10,10 +10,20 @@ from app.api.v1.dependencies import (
     require_org_role,
 )
 from app.schemas.common import SuccessResponse
-from app.schemas.product import ProductCreate, ProductImportPreview, ProductRead, ProductUpdate
+from app.schemas.product import ProductCreate, ProductImportPreview, ProductRead, ProductUpdate, UnitCreate, UnitRead
 from app.services import audit_service, product_service, subscription_service
 
 router = APIRouter()
+
+
+# NOTE: /units must be declared before /{product_id} so "units" is not
+# captured as a product id.
+@router.get("/units", response_model=SuccessResponse[list[UnitRead]])
+def list_all_units(
+    org_id: UUID = Depends(get_current_organization),
+    _=Depends(get_current_user),
+):
+    return SuccessResponse(data=product_service.list_all_units(str(org_id)))
 
 
 @router.get("", response_model=SuccessResponse[list[ProductRead]])
@@ -87,3 +97,45 @@ def delete_product(
 def import_preview():
     """Phase 1 stub: validates headers only. Full CSV import lands in Phase 2."""
     return SuccessResponse(data=ProductImportPreview())
+
+
+# Sell units (Phase 4 C1) ----------------------------------------------------
+
+
+@router.get("/{product_id}/units", response_model=SuccessResponse[list[UnitRead]])
+def list_units(
+    product_id: UUID,
+    org_id: UUID = Depends(get_current_organization),
+    _=Depends(get_current_user),
+):
+    return SuccessResponse(
+        data=product_service.list_units(str(org_id), str(product_id)))
+
+
+@router.post("/{product_id}/units", response_model=SuccessResponse[UnitRead],
+             status_code=201,
+             dependencies=[Depends(require_org_role("owner", "manager"))])
+def create_unit(
+    product_id: UUID,
+    body: UnitCreate,
+    org_id: UUID = Depends(get_current_organization),
+    _=Depends(get_current_user),
+):
+    return SuccessResponse(
+        data=product_service.create_unit(
+            str(org_id), str(product_id), body.model_dump(mode="json")),
+        message="Unit added",
+    )
+
+
+@router.delete("/{product_id}/units/{unit_id}",
+               response_model=SuccessResponse[dict],
+               dependencies=[Depends(require_org_role("owner", "manager"))])
+def delete_unit(
+    product_id: UUID,
+    unit_id: UUID,
+    org_id: UUID = Depends(get_current_organization),
+    _=Depends(get_current_user),
+):
+    product_service.delete_unit(str(org_id), str(product_id), str(unit_id))
+    return SuccessResponse(data={}, message="Unit removed")

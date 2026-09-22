@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase-client';
+import { api } from '../lib/api-client';
 import { queryClient } from '../app/queryClient';
-import { AuthShell, Button, Field, TextInput } from '../components/ui';
+import { AuthShell, Button, Field, PasswordInput, TextInput } from '../components/ui';
 
 export default function RegisterPage() {
   const [name, setName] = useState('');
@@ -11,6 +12,27 @@ export default function RegisterPage() {
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
+
+  // Already signed in (revisited /register): same resolution as Login.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        if (!data.session || cancelled) return;
+        const res = await api.get('/auth/me');
+        if (cancelled) return;
+        const orgId = res.data.data.organization_id;
+        if (orgId) localStorage.setItem('ventapos:orgId', orgId);
+        navigate(orgId ? '/pos' : '/onboarding', { replace: true });
+      } catch {
+        // Stay on the form.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [navigate]);
 
   const register = async () => {
     setMsg('');
@@ -41,7 +63,7 @@ export default function RegisterPage() {
 
   return (
     <AuthShell title="Create your account" sub="Free to start, no card needed">
-      <div className="grid gap-3">
+      <div className="grid gap-4">
         <Field label="Full name">
           <TextInput
             autoComplete="name"
@@ -58,22 +80,21 @@ export default function RegisterPage() {
           />
         </Field>
         <Field label="Password" hint="At least 6 characters.">
-          <TextInput
-            type="password"
+          <PasswordInput
             autoComplete="new-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && register()}
           />
         </Field>
-        <Button size="large" className="w-full" disabled={busy} onClick={register}>
+        <Button size="large" className="mt-1 w-full" disabled={busy} onClick={register}>
           {busy ? 'Creating…' : 'Create account'}
         </Button>
       </div>
-      {msg && <p className="mt-3 text-[13px]">{msg}</p>}
-      <p className="mt-4 text-center text-[13px] text-gray-500">
+      {msg && <p className="mt-4 text-sm text-red-600">{msg}</p>}
+      <p className="mt-6 text-center text-sm text-gray-500">
         Already have an account?{' '}
-        <Link to="/login" className="font-medium text-primary">
+        <Link to="/login" className="font-medium text-primary hover:text-primary-hover">
           Sign in
         </Link>
       </p>

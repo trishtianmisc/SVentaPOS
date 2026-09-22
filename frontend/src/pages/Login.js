@@ -1,17 +1,42 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase-client';
 import { api } from '../lib/api-client';
 import { useSessionStore } from '../stores/session';
 import { queryClient } from '../app/queryClient';
-import { AuthShell, Button, Field, TextInput, toast } from '../components/ui';
+import { AuthShell, Button, Field, PasswordInput, TextInput, toast } from '../components/ui';
 export default function LoginPage() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [msg, setMsg] = useState('');
     const [busy, setBusy] = useState(false);
     const navigate = useNavigate();
+    // Already signed in (revisited /login): leave once org context is known.
+    // Mid-login does not re-run this — login() owns that navigation.
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const { data } = await supabase.auth.getSession();
+                if (!data.session || cancelled)
+                    return;
+                const res = await api.get('/auth/me');
+                if (cancelled)
+                    return;
+                const orgId = res.data.data.organization_id;
+                if (orgId)
+                    localStorage.setItem('ventapos:orgId', orgId);
+                navigate(orgId ? '/pos' : '/onboarding', { replace: true });
+            }
+            catch {
+                // Stay on the form; user can retry or sign in again.
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [navigate]);
     const login = async () => {
         setMsg('');
         setBusy(true);
@@ -66,5 +91,5 @@ export default function LoginPage() {
             setBusy(false);
         }
     };
-    return (_jsxs(AuthShell, { title: "Sign in", sub: "Sign in to your store", children: [_jsxs("div", { className: "grid gap-3", children: [_jsx(Field, { label: "Email", children: _jsx(TextInput, { type: "email", autoComplete: "username", value: email, onChange: (e) => setEmail(e.target.value) }) }), _jsx(Field, { label: "Password", children: _jsx(TextInput, { type: "password", autoComplete: "current-password", value: password, onChange: (e) => setPassword(e.target.value), onKeyDown: (e) => e.key === 'Enter' && login() }) }), _jsx(Button, { size: "large", className: "w-full", disabled: busy, onClick: login, children: busy ? 'Signing in…' : 'Sign in' })] }), msg && _jsx("p", { className: "mt-3 text-[13px]", children: msg }), _jsxs("p", { className: "mt-4 text-center text-[13px] text-gray-500", children: ["New here?", ' ', _jsx(Link, { to: "/register", className: "font-medium text-primary", children: "Create an account" })] })] }));
+    return (_jsxs(AuthShell, { title: "Sign in", sub: "Sign in to your store", children: [_jsxs("div", { className: "grid gap-4", children: [_jsx(Field, { label: "Email", children: _jsx(TextInput, { type: "email", autoComplete: "username", value: email, onChange: (e) => setEmail(e.target.value) }) }), _jsx(Field, { label: "Password", children: _jsx(PasswordInput, { autoComplete: "current-password", value: password, onChange: (e) => setPassword(e.target.value), onKeyDown: (e) => e.key === 'Enter' && login() }) }), _jsx(Button, { size: "large", className: "mt-1 w-full", disabled: busy, onClick: login, children: busy ? 'Signing in…' : 'Sign in' })] }), msg && _jsx("p", { className: "mt-4 text-sm text-red-600", children: msg }), _jsxs("p", { className: "mt-6 text-center text-sm text-gray-500", children: ["New here?", ' ', _jsx(Link, { to: "/register", className: "font-medium text-primary hover:text-primary-hover", children: "Create an account" })] })] }));
 }

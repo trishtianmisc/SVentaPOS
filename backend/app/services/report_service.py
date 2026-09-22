@@ -1,5 +1,5 @@
-"""Read-only report aggregations. Tax = 0 in Phase 2; profit uses
-sale-item cost snapshots (exact), inventory value uses latest cost_price."""
+"""Read-only report aggregations. VAT-inclusive (Phase 6): revenue stays
+gross; tax_amount is carved out. Profit uses sale-item cost snapshots."""
 from datetime import date
 
 
@@ -19,12 +19,13 @@ def _in_range(day: str, start: str | None, end: str | None) -> bool:
 
 def sales(org_id: str, store_id: str, start: str | None, end: str | None) -> dict:
     sb = _sb()
-    rows = (sb.table("sales").select("id,total,created_at,status")
+    rows = (sb.table("sales").select("id,total,tax_amount,created_at,status")
             .eq("organization_id", org_id).eq("store_id", store_id)
             .eq("status", "COMPLETED").order("created_at", desc=True)
             .limit(1000).execute().data or [])
     rows = [r for r in rows if _in_range((r["created_at"] or "")[:10], start, end)]
     total = round(sum(float(r["total"]) for r in rows), 2)
+    vat = round(sum(float(r.get("tax_amount") or 0) for r in rows), 2)
     by_day: dict[str, float] = {}
     for r in rows:
         d = (r["created_at"] or "")[:10]
@@ -42,6 +43,7 @@ def sales(org_id: str, store_id: str, start: str | None, end: str | None) -> dic
     n = len(rows)
     return {"total": total, "count": n,
             "average": round(total / n, 2) if n else 0,
+            "vat_collected": vat,
             "by_day": [{"day": k, "total": v} for k, v in sorted(by_day.items())],
             "by_method": pay_rows}
 
@@ -145,3 +147,95 @@ def utang(org_id: str) -> dict:
     return {"total_outstanding": round(sum(r["balance"] for r in out), 2),
             "customers": out,
             "as_of": date.today().isoformat()}
+
+
+# Consolidated (Phase 5): org-wide rollups reusing the per-store ----------
+# aggregations above, so per-store contracts never change. ----------------
+
+
+def _org_stores(org_id: str) -> list[dict]:
+    sb = _sb()
+    res = (sb.table("stores").select("id,name").eq("organization_id", org_id)
+           .execute())
+    return res.data or []
+
+
+def _merge_by_day(parts: list[dict]) -> list[dict]:
+    by_day: dict[str, float] = {}
+    for p in parts:
+        for row in p.get("by_day", []):
+            by_day[row["day"]] = round(
+                by_day.get(row["day"], 0) + float(row["total"]), 2)
+    return [{"day": k, "total": v} for k, v in sorted(by_day.items())]
+
+
+def _merge_by_method(parts: list[dict]) -> list[dict]:
+    by_m: dict[str, float] = {}
+    for p in parts:
+        for row in p.get("by_method", []):
+            by_m[row["method"]] = round(
+                by_m.get(row["method"], 0) + float(row["total"]), 2)
+    return [{"method": k, "total": v} for k, v in sorted(by_m.items())]
+
+
+def consolidated_sales(org_id: str, start: str | None,
+                       end: str | None) -> dict:
+    stores = _org_stores(org_id)
+    parts = []
+    for st in stores:
+        r = sales(org_id, str(st["id"]), start, end)
+        parts.append({"store_id": st["id"], "store_name": st.get("name"), **r})
+    total = round(sum(p["total"] for p in parts), 2)
+    count = sum(p["count"] for p in parts)
+    return {"total": total, "count": count,
+            "average": round(total / count, 2) if count else 0,
+            "vat_collected": round(sum(p.get("vat_collected", 0)
+                                       for p in parts), 2),
+            "by_day": _merge_by_day(parts),
+            "by_method": _merge_by_method(parts),
+            "by_store": parts}
+
+
+def consolidated_profit(org_id: str, start: str | None,
+                        end: str | None) -> dict:
+    stores = _org_stores(org_id)
+    parts = []
+    for st in stores:
+        r = profit(org_id, str(st["id"]), start, end)
+        parts.append({"store_id": st["id"], "store_name": st.get("name"), **r})
+    revenue = round(sum(p["revenue"] for p in parts), 2)
+    cogs = round(sum(p["cogs"] for p in parts), 2)
+    return {"revenue": revenue, "cogs": cogs,
+            "gross_profit": round(revenue - cogs, 2),
+            "by_store": parts}
+
+
+def consolidated_expenses(org_id: str, start: str | None,
+                          end: str | None) -> dict:
+    stores = _org_stores(org_id)
+    parts = []
+    for st in stores:
+        r = expenses(org_id, str(st["id"]), start, end)
+        parts.append({"store_id": st["id"], "store_name": st.get("name"), **r})
+    by_c: dict[str, float] = {}
+    for p in parts:
+        for row in p.get("by_category", []):
+            by_c[row["category"]] = round(
+                by_c.get(row["category"], 0) + float(row["total"]), 2)
+    return {"total": round(sum(p["total"] for p in parts), 2),
+            "by_category": [{"category": k, "total": v}
+                            for k, v in sorted(by_c.items())],
+            "by_store": parts,
+            "from": start or "", "to": end or ""}
+
+
+def consolidated_inventory(org_id: str) -> dict:
+    stores = _org_stores(org_id)
+    parts = []
+    for st in stores:
+        r = inventory(org_id, str(st["id"]))
+        parts.append({"store_id": st["id"], "store_name": st.get("name"), **r})
+    return {"lines": sum(p["lines"] for p in parts),
+            "stock_value": round(sum(p["stock_value"] for p in parts), 2),
+            "low_stock": sum(p["low_stock"] for p in parts),
+            "by_store": parts}

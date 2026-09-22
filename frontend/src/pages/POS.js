@@ -5,9 +5,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api-client';
 import { qk } from '../lib/query-keys';
 import { formatPHP } from '../utils/currency';
-import { Badge } from '../components/ui';
+import { Badge, toast } from '../components/ui';
 import { useSessionStore } from '../stores/session';
-import { useCategories, useCustomers, useInventory, useProducts, } from '../hooks/useCatalog';
+import { useCategories, useCustomers, useInventory, useProducts, useUnits, } from '../hooks/useCatalog';
 const METHODS = ['cash', 'gcash', 'maya', 'card', 'bank', 'other', 'utang'];
 const NEEDS_REF = new Set(['gcash', 'maya', 'card', 'bank']);
 const QUICK_CASH = [20, 50, 100, 200, 500, 1000];
@@ -38,6 +38,26 @@ function isWholesale(p, qty) {
     const m = p.wholesale_min_qty;
     return w != null && m != null && qty >= m;
 }
+/** Factor converting a line's sell unit to base units ('pc' = 1). */
+function lineFactor(l, units) {
+    if (l.unit === 'pc')
+        return 1;
+    return Number(units?.find((u) => u.unit_name === l.unit)?.conversion_factor ?? 1);
+}
+/** Client mirror of the server unit price (server stays authoritative):
+ * explicit unit price wins, else tiered base price × factor. Tier triggers
+ * on base-unit quantity. */
+function linePrice(l, units) {
+    const f = lineFactor(l, units);
+    const base = unitPrice(l.product, l.qty * f);
+    if (l.unit === 'pc')
+        return base;
+    const sp = units?.find((u) => u.unit_name === l.unit)?.selling_price;
+    return sp != null ? Number(sp) : Math.round(base * f * 100) / 100;
+}
+function lineIsWholesale(l, units) {
+    return isWholesale(l.product, l.qty * lineFactor(l, units));
+}
 export default function POSPage() {
     const qc = useQueryClient();
     // Shared cached queries: mount any number of times (incl. StrictMode
@@ -47,6 +67,14 @@ export default function POSPage() {
     const categoriesQ = useCategories();
     const inventoryQ = useInventory();
     const customersQ = useCustomers();
+    const unitsQ = useUnits();
+    const unitsByProduct = useMemo(() => {
+        var _a;
+        const m = {};
+        for (const u of unitsQ.data ?? [])
+            (m[_a = u.product_id] ?? (m[_a] = [])).push(u);
+        return m;
+    }, [unitsQ.data]);
     const products = productsQ.data ?? [];
     const categories = categoriesQ.data ?? [];
     const customers = customersQ.data ?? [];
@@ -75,9 +103,43 @@ export default function POSPage() {
     const [discFor, setDiscFor] = useState(null);
     const [discVal, setDiscVal] = useState('');
     const searchRef = useRef(null);
+    // Shift gate (Phase 4): checkout requires an open shift.
+    const [shift, setShift] = useState(null);
+    const [shiftLoading, setShiftLoading] = useState(true);
+    const [openFloat, setOpenFloat] = useState('');
+    const [showClose, setShowClose] = useState(false);
+    const [closeCash, setCloseCash] = useState('');
+    const [closeNotes, setCloseNotes] = useState('');
+    const [zReport, setZReport] = useState(null);
+    const [shiftBusy, setShiftBusy] = useState(false);
+    const loadShift = async () => {
+        setShiftLoading(true);
+        try {
+            const res = await api.get('/shifts/current');
+            setShift(res.data.data ?? null);
+        }
+        catch {
+            setShift(null);
+        }
+        finally {
+            setShiftLoading(false);
+        }
+    };
     // Cart marker lets the store picker confirm before clearing (prices and
     // stock differ between stores). Cleared whenever the active store changes.
     const storeVersion = useSessionStore((s) => s.storeVersion);
+    const storeId = useSessionStore((s) => s.storeId);
+    // Store profile for the receipt header (name/address/TIN) + VAT flag.
+    const [storeInfo, setStoreInfo] = useState(null);
+    useEffect(() => {
+        api
+            .get('/stores')
+            .then((r) => {
+            const list = r.data.data ?? [];
+            setStoreInfo(list.find((s) => s.id === storeId) ?? list[0] ?? null);
+        })
+            .catch(() => undefined);
+    }, [storeId, storeVersion]);
     const count = cart.reduce((s, l) => s + l.qty, 0);
     useEffect(() => {
         localStorage.setItem('ventapos:cartCount', String(count));
@@ -86,6 +148,12 @@ export default function POSPage() {
     useEffect(() => {
         if (storeVersion !== firstVersion.current)
             setCart([]);
+    }, [storeVersion]);
+    useEffect(() => {
+        loadShift();
+        setZReport(null);
+        setShowClose(false);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [storeVersion]);
     useEffect(() => {
         if (!receipt)
@@ -121,19 +189,24 @@ export default function POSPage() {
         const s = stock[p.id];
         return (p.track_inventory && s !== undefined && s.reorder > 0 && s.qty > 0 && s.qty <= s.reorder);
     };
-    const setQty = (id, qty) => {
+    const setQty = (id, qty, unit) => {
         setCart((c) => {
             const line = c.find((l) => l.product.id === id);
             if (!line)
                 return c;
+            const u = unit ?? line.unit;
             if (qty <= 0)
-                return c.filter((l) => l.product.id !== id);
-            const max = line.product.track_inventory ? (stock[id]?.qty ?? 0) : Infinity;
+                return u === line.unit ? c.filter((l) => l.product.id !== id) : c;
+            const f = u === 'pc'
+                ? 1
+                : Number(unitsByProduct[id]?.find((x) => x.unit_name === u)
+                    ?.conversion_factor ?? 1);
+            const max = line.product.track_inventory ? (stock[id]?.qty ?? 0) / f : Infinity;
             if (qty > max) {
-                setMsg(`Only ${max} left in stock`);
+                setMsg(`Only ${max} ${u} left in stock`);
                 return c;
             }
-            return c.map((l) => (l.product.id === id ? { ...l, qty } : l));
+            return c.map((l) => (l.product.id === id ? { ...l, qty, unit: u } : l));
         });
     };
     const add = (p) => {
@@ -142,7 +215,7 @@ export default function POSPage() {
         const line = cart.find((l) => l.product.id === p.id);
         setQty(p.id, line ? line.qty + 1 : 1);
         if (!line)
-            setCart((c) => [...c, { product: p, qty: 1, discount: 0 }]);
+            setCart((c) => [...c, { product: p, qty: 1, discount: 0, unit: 'pc' }]);
     };
     const clearCart = () => {
         if (cart.length === 0)
@@ -165,8 +238,11 @@ export default function POSPage() {
             (!q || p.name.toLowerCase().includes(q) || (p.barcode ?? '').toLowerCase().includes(q)));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [products, cat, query, inStockOnly, inventoryQ.data]);
-    const subtotal = cart.reduce((s, l) => s + unitPrice(l.product, l.qty) * l.qty, 0);
-    const lineDisc = cart.reduce((s, l) => s + Math.min(l.discount, unitPrice(l.product, l.qty) * l.qty), 0);
+    const subtotal = cart.reduce((s, l) => s + linePrice(l, unitsByProduct[l.product.id]) * l.qty, 0);
+    const lineDisc = cart.reduce((s, l) => {
+        const gross = linePrice(l, unitsByProduct[l.product.id]) * l.qty;
+        return s + Math.min(l.discount, gross);
+    }, 0);
     const estimate = Math.max(0, Math.round((subtotal - lineDisc) * 100) / 100);
     const pickMethod = (m) => {
         setMethod(m);
@@ -185,11 +261,57 @@ export default function POSPage() {
             setMethod('utang');
         }
     };
-    const canCharge = cart.length > 0 &&
+    const canCharge = !!shift &&
+        cart.length > 0 &&
         (method === 'utang'
             ? !!customerId
             : method !== 'cash' || Number(tendered) >= estimate);
     canChargeRef.current = canCharge;
+    const openShift = async () => {
+        setMsg('');
+        setShiftBusy(true);
+        try {
+            const res = await api.post('/shifts/open', {
+                opening_float: Number(openFloat) || 0,
+            });
+            setShift(res.data.data);
+            setOpenFloat('');
+            toast('success', 'Shift opened');
+        }
+        catch (e) {
+            setMsg(e.response?.data?.error?.message ?? 'Could not open shift');
+            await loadShift();
+        }
+        finally {
+            setShiftBusy(false);
+        }
+    };
+    const closeShift = async () => {
+        if (!shift)
+            return;
+        setMsg('');
+        setShiftBusy(true);
+        try {
+            const res = await api.post(`/shifts/${shift.id}/close`, {
+                counted_cash: Number(closeCash) || 0,
+                notes: closeNotes.trim() || undefined,
+            });
+            setShift(null);
+            setZReport(res.data.data);
+            setShowClose(false);
+            setCloseCash('');
+            setCloseNotes('');
+            toast('success', Number(res.data.data.variance) === 0
+                ? 'Shift closed — cash exact'
+                : `Shift closed — variance ${formatPHP(res.data.data.variance)}`);
+        }
+        catch (e) {
+            setMsg(e.response?.data?.error?.message ?? 'Could not close shift');
+        }
+        finally {
+            setShiftBusy(false);
+        }
+    };
     const checkout = async (override = false, reason = '', key = crypto.randomUUID()) => {
         setMsg('');
         if (method === 'utang' && !customerId) {
@@ -208,6 +330,7 @@ export default function POSPage() {
                     product_id: l.product.id,
                     quantity: l.qty,
                     discount: l.discount,
+                    ...(l.unit !== 'pc' ? { unit_name: l.unit } : {}),
                 })),
                 payments: [
                     {
@@ -250,6 +373,8 @@ export default function POSPage() {
                 }
             }
             setMsg(errMsg);
+            if (errMsg.toLowerCase().includes('shift'))
+                await loadShift();
         }
         finally {
             setCharging(false);
@@ -263,7 +388,10 @@ export default function POSPage() {
         setDiscFor(null);
         setDiscVal('');
     };
-    return (_jsxs("div", { className: "w-full p-4 md:p-6", children: [loading && _jsx("p", { className: "text-sm text-gray-500", children: "Loading register\u2026" }), loadError && (_jsx("p", { className: "text-sm text-red-600", children: "Could not load catalog. Check connection and retry." })), _jsxs("div", { className: "mt-4 grid gap-4 xl:grid-cols-[1fr_380px]", children: [_jsxs("section", { "aria-label": "Product catalog", children: [_jsxs("div", { className: "flex gap-2", children: [_jsx("button", { type: "button", onClick: () => searchRef.current?.focus(), title: "Focus search (Ctrl+K). Barcode scanners type here.", className: "h-11 shrink-0 rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-100", children: "Scan" }), _jsx("input", { ref: searchRef, className: "h-11 min-w-0 flex-1 rounded-lg border border-gray-300 bg-white px-3 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary", placeholder: "Scan barcode or type a product  (Ctrl+K)", "aria-label": "Search products", value: query, onChange: (e) => setQuery(e.target.value) }), _jsx("button", { type: "button", "aria-pressed": inStockOnly, title: "Show in-stock only", onClick: () => setInStockOnly((v) => !v), className: `h-11 shrink-0 rounded-lg border px-3 text-sm font-medium ${inStockOnly ? 'border-primary bg-primary-soft text-primary-ink' : 'border-gray-300 bg-white text-gray-600'}`, children: "Stock" }), _jsx("div", { role: "group", "aria-label": "Catalog view", className: "flex shrink-0 overflow-hidden rounded-lg border border-gray-300", children: ['grid', 'list'].map((v) => (_jsx("button", { type: "button", "aria-pressed": view === v, onClick: () => setView(v), className: `h-11 px-3 text-sm capitalize ${view === v ? 'bg-primary font-semibold text-white' : 'bg-white text-gray-500'}`, children: v }, v))) })] }), categories.length > 0 && (_jsxs("div", { className: "mt-2 flex flex-wrap gap-2", role: "group", "aria-label": "Categories", children: [_jsxs("button", { onClick: () => setCat(null), "aria-pressed": cat === null, className: `h-9 rounded-full px-3 text-[13px] ${cat === null ? 'bg-primary font-medium text-white' : 'border border-gray-300 bg-white text-gray-600'}`, children: ["All \u00B7 ", products.length] }), categories.map((c) => (_jsxs("button", { onClick: () => setCat(cat === c.id ? null : c.id), "aria-pressed": cat === c.id, className: `h-9 rounded-full px-3 text-[13px] ${cat === c.id ? 'bg-primary font-medium text-white' : 'border border-gray-300 bg-white text-gray-600'}`, children: [c.name, " \u00B7 ", catCounts[c.id] ?? 0] }, c.id)))] })), msg && (_jsx("p", { role: "alert", className: "mt-2 text-sm text-red-600", children: msg })), view === 'grid' ? (_jsx("div", { className: "mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4 xl:grid-cols-5", children: visible.map((p) => {
+    return (_jsxs("div", { className: "w-full p-4 md:p-6", children: [loading && _jsx("p", { className: "text-sm text-gray-500", children: "Loading register\u2026" }), loadError && (_jsx("p", { className: "text-sm text-red-600", children: "Could not load catalog. Check connection and retry." })), _jsx("div", { className: "mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2", children: shiftLoading ? (_jsx("span", { className: "text-sm text-gray-500", children: "Checking shift\u2026" })) : shift ? (_jsxs(_Fragment, { children: [_jsx(Badge, { tone: "green", children: "Shift open" }), _jsxs("span", { className: "text-sm text-gray-600", children: ["Float ", formatPHP(Number(shift.opening_float) || 0), " \u00B7 since", ' ', new Date(shift.opened_at).toLocaleTimeString([], {
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                })] }), _jsx("button", { type: "button", onClick: () => setShowClose(true), className: "ml-auto h-9 rounded-lg border border-gray-300 px-3 text-sm font-medium text-gray-700 hover:bg-gray-100", children: "Close shift" })] })) : (_jsxs(_Fragment, { children: [_jsx(Badge, { tone: "amber", children: "No open shift" }), _jsx("span", { className: "text-sm text-gray-600", children: "Open a shift to start selling." }), _jsx("input", { "aria-label": "Opening float", className: "ml-auto h-9 w-28 rounded-lg border border-gray-300 px-2 text-sm", placeholder: "Float \u20B1", inputMode: "decimal", value: openFloat, onChange: (e) => setOpenFloat(e.target.value) }), _jsx("button", { type: "button", disabled: shiftBusy, onClick: openShift, className: "h-9 rounded-lg bg-primary px-4 text-sm font-medium text-white disabled:opacity-40", children: shiftBusy ? 'Opening…' : 'Open shift' })] })) }), msg && _jsx("p", { className: "mt-2 text-[13px] text-red-600", children: msg }), _jsxs("div", { className: "mt-4 grid gap-4 xl:grid-cols-[1fr_380px]", children: [_jsxs("section", { "aria-label": "Product catalog", children: [_jsxs("div", { className: "flex gap-2", children: [_jsx("button", { type: "button", onClick: () => searchRef.current?.focus(), title: "Focus search (Ctrl+K). Barcode scanners type here.", className: "h-11 shrink-0 rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-100", children: "Scan" }), _jsx("input", { ref: searchRef, className: "h-11 min-w-0 flex-1 rounded-lg border border-gray-300 bg-white px-3 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary", placeholder: "Scan barcode or type a product  (Ctrl+K)", "aria-label": "Search products", value: query, onChange: (e) => setQuery(e.target.value) }), _jsx("button", { type: "button", "aria-pressed": inStockOnly, title: "Show in-stock only", onClick: () => setInStockOnly((v) => !v), className: `h-11 shrink-0 rounded-lg border px-3 text-sm font-medium ${inStockOnly ? 'border-primary bg-primary-soft text-primary-ink' : 'border-gray-300 bg-white text-gray-600'}`, children: "Stock" }), _jsx("div", { role: "group", "aria-label": "Catalog view", className: "flex shrink-0 overflow-hidden rounded-lg border border-gray-300", children: ['grid', 'list'].map((v) => (_jsx("button", { type: "button", "aria-pressed": view === v, onClick: () => setView(v), className: `h-11 px-3 text-sm capitalize ${view === v ? 'bg-primary font-semibold text-white' : 'bg-white text-gray-500'}`, children: v }, v))) })] }), categories.length > 0 && (_jsxs("div", { className: "mt-2 flex flex-wrap gap-2", role: "group", "aria-label": "Categories", children: [_jsxs("button", { onClick: () => setCat(null), "aria-pressed": cat === null, className: `h-9 rounded-full px-3 text-[13px] ${cat === null ? 'bg-primary font-medium text-white' : 'border border-gray-300 bg-white text-gray-600'}`, children: ["All \u00B7 ", products.length] }), categories.map((c) => (_jsxs("button", { onClick: () => setCat(cat === c.id ? null : c.id), "aria-pressed": cat === c.id, className: `h-9 rounded-full px-3 text-[13px] ${cat === c.id ? 'bg-primary font-medium text-white' : 'border border-gray-300 bg-white text-gray-600'}`, children: [c.name, " \u00B7 ", catCounts[c.id] ?? 0] }, c.id)))] })), msg && (_jsx("p", { role: "alert", className: "mt-2 text-sm text-red-600", children: msg })), view === 'grid' ? (_jsx("div", { className: "mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4 xl:grid-cols-5", children: visible.map((p) => {
                                     const oos = outOfStock(p);
                                     const line = cart.find((l) => l.product.id === p.id);
                                     return (_jsxs("div", { className: `flex flex-col items-center rounded-xl border bg-white p-3 text-center ${oos ? 'opacity-40' : ''}`, children: [_jsxs("button", { disabled: oos, onClick: () => add(p), "aria-label": `Add ${p.name} to order`, className: `flex w-full flex-col items-center ${oos ? '' : 'hover:opacity-80'}`, children: [_jsx("span", { className: `flex h-10 w-10 items-center justify-center rounded-full text-lg font-bold ${tileColor(p.id)}`, children: p.name.charAt(0).toUpperCase() }), _jsx("span", { className: "mt-1 w-full truncate text-xs font-medium", children: p.name }), _jsx("span", { className: "text-xs font-bold text-primary-ink", children: formatPHP(p.retail_price) })] }), line ? (_jsxs("span", { className: "mt-2 inline-flex items-center rounded-full bg-primary px-1 py-0.5 text-white", children: [_jsx("button", { "aria-label": `Decrease ${p.name}`, className: "px-2 py-0.5", onClick: () => setQty(p.id, line.qty - 1), children: "\u2212" }), _jsx("span", { className: "min-w-6 text-center text-sm font-bold", children: line.qty }), _jsx("button", { "aria-label": `Increase ${p.name}`, className: "px-2 py-0.5", onClick: () => add(p), children: "+" })] })) : (_jsx("span", { className: "mt-2", children: oos ? (_jsx(Badge, { tone: "red", children: "Out of stock" })) : lowStock(p) ? (_jsxs(Badge, { tone: "amber", children: ["Low \u00B7 ", stock[p.id]?.qty, " left"] })) : (_jsx("span", { className: "text-[11px] text-gray-400", children: p.track_inventory ? `${stock[p.id]?.qty ?? 0} left` : '•' })) }))] }, p.id));
@@ -275,18 +403,24 @@ export default function POSPage() {
                                             { key: true, label: 'Walk-in' },
                                             { key: false, label: 'Customer' },
                                         ].map((o) => (_jsx("button", { onClick: () => pickParty(o.key), "aria-pressed": walkIn === o.key, className: `h-11 rounded-xl text-sm font-medium ${walkIn === o.key ? 'bg-primary font-semibold text-white' : 'border border-gray-300 text-gray-600'}`, children: o.label }, o.label))) }), _jsxs("ul", { className: "mt-2 max-h-64 divide-y divide-gray-100 overflow-auto", children: [cart.map((l) => {
-                                                const ws = isWholesale(l.product, l.qty);
-                                                const max = l.product.track_inventory ? (stock[l.product.id]?.qty ?? 0) : Infinity;
-                                                return (_jsxs("li", { className: "py-3", children: [_jsxs("div", { className: "flex items-start justify-between gap-2", children: [_jsxs("div", { className: "min-w-0", children: [_jsx("p", { className: "truncate text-sm font-medium", children: l.product.name }), _jsxs("p", { className: "text-xs text-gray-500", children: [formatPHP(unitPrice(l.product, l.qty)), " each", ws && (_jsx("span", { className: "ml-1 rounded-full bg-primary-soft px-1.5 py-0.5 text-[11px] font-semibold text-primary-ink", children: "Wholesale" }))] })] }), _jsx("p", { className: "text-sm font-semibold", children: formatPHP(unitPrice(l.product, l.qty) * l.qty - Math.min(l.discount, unitPrice(l.product, l.qty) * l.qty)) })] }), _jsxs("div", { className: "mt-1 flex items-center justify-between", children: [_jsxs("span", { className: "inline-flex items-center rounded-full border border-gray-200", children: [_jsx("button", { "aria-label": `Decrease ${l.product.name}`, className: "px-2.5 py-1", onClick: () => setQty(l.product.id, l.qty - 1), children: "\u2212" }), _jsxs("span", { className: "min-w-10 text-center text-sm font-bold", children: [l.qty, _jsx("span", { className: "font-normal text-gray-400", children: " pcs" })] }), _jsx("button", { "aria-label": `Increase ${l.product.name}`, className: "px-2.5 py-1", onClick: () => add(l.product), children: "+" })] }), discFor === l.product.id ? (_jsxs("span", { className: "inline-flex items-center gap-1", children: [_jsx("input", { "aria-label": `Discount for ${l.product.name}`, className: "h-9 w-20 rounded-lg border border-gray-300 px-2 text-sm", inputMode: "decimal", autoFocus: true, value: discVal, onChange: (e) => setDiscVal(e.target.value), onKeyDown: (e) => {
+                                                const units = unitsByProduct[l.product.id] ?? [];
+                                                const price = linePrice(l, units);
+                                                const gross = price * l.qty;
+                                                const ws = lineIsWholesale(l, units);
+                                                const f = lineFactor(l, units);
+                                                const max = l.product.track_inventory
+                                                    ? (stock[l.product.id]?.qty ?? 0) / f
+                                                    : Infinity;
+                                                return (_jsxs("li", { className: "py-3", children: [_jsxs("div", { className: "flex items-start justify-between gap-2", children: [_jsxs("div", { className: "min-w-0", children: [_jsx("p", { className: "truncate text-sm font-medium", children: l.product.name }), _jsxs("p", { className: "text-xs text-gray-500", children: [formatPHP(price), " per ", l.unit, ws && (_jsx("span", { className: "ml-1 rounded-full bg-primary-soft px-1.5 py-0.5 text-[11px] font-semibold text-primary-ink", children: "Wholesale" }))] })] }), _jsx("p", { className: "text-sm font-semibold", children: formatPHP(gross - Math.min(l.discount, gross)) })] }), _jsxs("div", { className: "mt-1 flex items-center justify-between", children: [_jsxs("span", { className: "inline-flex items-center gap-1", children: [_jsxs("span", { className: "inline-flex items-center rounded-full border border-gray-200", children: [_jsx("button", { "aria-label": `Decrease ${l.product.name}`, className: "px-2.5 py-1", onClick: () => setQty(l.product.id, l.qty - 1), children: "\u2212" }), _jsxs("span", { className: "min-w-10 text-center text-sm font-bold", children: [l.qty, _jsxs("span", { className: "font-normal text-gray-400", children: [" ", l.unit] })] }), _jsx("button", { "aria-label": `Increase ${l.product.name}`, className: "px-2.5 py-1", onClick: () => add(l.product), children: "+" })] }), units.length > 0 && (_jsxs("select", { "aria-label": `Unit for ${l.product.name}`, className: "h-8 rounded-lg border border-gray-200 bg-white px-1 text-xs", value: l.unit, onChange: (e) => setQty(l.product.id, l.qty, e.target.value), children: [_jsx("option", { value: "pc", children: "pc" }), units.map((u) => (_jsx("option", { value: u.unit_name, children: u.unit_name }, u.id)))] }))] }), discFor === l.product.id ? (_jsxs("span", { className: "inline-flex items-center gap-1", children: [_jsx("input", { "aria-label": `Discount for ${l.product.name}`, className: "h-9 w-20 rounded-lg border border-gray-300 px-2 text-sm", inputMode: "decimal", autoFocus: true, value: discVal, onChange: (e) => setDiscVal(e.target.value), onKeyDown: (e) => {
                                                                                 if (e.key === 'Enter')
                                                                                     applyDisc(l.product.id);
                                                                             } }), _jsx("button", { className: "h-9 rounded-lg bg-primary px-2 text-sm font-medium text-white", onClick: () => applyDisc(l.product.id), children: "OK" })] })) : (_jsxs("span", { className: "inline-flex items-center gap-2", children: [l.discount > 0 && (_jsxs("span", { className: "text-xs text-gray-500", children: ["\u2212", formatPHP(l.discount)] })), _jsx("button", { className: "text-xs font-medium text-gray-500 hover:text-primary", onClick: () => {
                                                                                 setDiscFor(l.product.id);
                                                                                 setDiscVal(l.discount ? String(l.discount) : '');
-                                                                            }, children: "Discount" }), _jsx("button", { "aria-label": `Remove ${l.product.name}`, className: "text-gray-400 hover:text-red-700", onClick: () => setQty(l.product.id, 0), children: "\u00D7" })] }))] }), l.qty >= max && max !== Infinity && (_jsxs("p", { className: "mt-1 text-xs text-amber-700", children: ["Only ", max, " pcs in stock"] }))] }, l.product.id));
+                                                                            }, children: "Discount" }), _jsx("button", { "aria-label": `Remove ${l.product.name}`, className: "text-gray-400 hover:text-red-700", onClick: () => setQty(l.product.id, 0), children: "\u00D7" })] }))] }), l.qty >= max && max !== Infinity && (_jsxs("p", { className: "mt-1 text-xs text-amber-700", children: ["Only ", max, " ", l.unit, " in stock"] }))] }, l.product.id));
                                             }), cart.length === 0 && (_jsx("li", { className: "py-4 text-center text-sm text-gray-400", children: "Tap a product to start an order." }))] }), _jsxs("div", { className: "mt-2 border-t border-gray-100 pt-3 text-sm", children: [_jsxs("p", { className: "flex justify-between text-gray-500", children: [_jsx("span", { children: "Net Sales" }), _jsx("span", { children: formatPHP(subtotal) })] }), lineDisc > 0 && (_jsxs("p", { className: "flex justify-between text-gray-500", children: [_jsx("span", { children: "Discount" }), _jsxs("span", { children: ["\u2212", formatPHP(lineDisc)] })] })), _jsxs("p", { className: "mt-1 flex justify-between text-base font-bold", children: [_jsx("span", { children: "Total" }), _jsx("span", { children: formatPHP(estimate) })] })] }), _jsx("div", { className: "mt-3 grid grid-cols-3 gap-1", role: "group", "aria-label": "Payment method", children: METHODS.map((m) => (_jsx("button", { onClick: () => pickMethod(m), "aria-pressed": method === m, className: `h-10 rounded-lg border px-2 text-xs capitalize ${method === m ? 'border-primary bg-primary-soft font-bold text-primary-ink' : 'border-gray-200 text-gray-600'}`, children: m }, m))) }), method === 'utang' && (_jsxs("select", { "aria-label": "Customer for utang", className: "mt-2 h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm", value: customerId, onChange: (e) => setCustomerId(e.target.value), children: [_jsx("option", { value: "", children: "Select customer\u2026" }), customers.map((c) => (_jsxs("option", { value: c.id, children: [c.name, " (", formatPHP(c.balance ?? 0), ")"] }, c.id)))] })), NEEDS_REF.has(method) && (_jsx("input", { "aria-label": `${method} reference number`, className: "mt-2 h-11 w-full rounded-lg border border-gray-300 px-3 text-sm", placeholder: `${method.toUpperCase()} reference no.`, value: reference, onChange: (e) => setReference(e.target.value) })), method === 'cash' && (_jsxs(_Fragment, { children: [_jsx("input", { "aria-label": "Cash received", className: "mt-2 h-11 w-full rounded-lg border border-gray-300 px-3 text-sm", placeholder: "Cash received", value: tendered, onChange: (e) => setTendered(e.target.value), inputMode: "decimal" }), _jsxs("div", { className: "mt-2 grid grid-cols-3 gap-1", children: [_jsx("button", { className: "h-9 rounded-lg border border-gray-200 px-2 text-xs font-medium", onClick: () => setTendered(String(estimate)), children: "Exact" }), QUICK_CASH.filter((q) => q >= estimate)
                                                         .slice(0, 5)
-                                                        .map((q) => (_jsx("button", { className: "h-9 rounded-lg border border-gray-200 px-2 text-xs font-medium", onClick: () => setTendered(String(q)), children: q }, q)))] }), Number(tendered) >= estimate && estimate > 0 && (_jsxs("p", { className: "mt-2 text-sm", children: ["Change: ", _jsx("span", { className: "font-bold", children: formatPHP(Number(tendered) - estimate) })] }))] })), _jsxs("div", { className: "mt-3 grid grid-cols-[1fr_auto] gap-2", children: [_jsx(Link, { to: "/sales", className: "inline-flex h-12 items-center justify-center rounded-xl border border-gray-300 text-sm font-medium text-gray-700", children: "History" }), _jsx("button", { disabled: !canCharge || charging, onClick: () => checkout(), className: "inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-primary px-6 font-bold text-white disabled:opacity-40", children: charging ? 'Charging…' : `Checkout ${formatPHP(estimate)}` })] }), _jsx("p", { className: "mt-1 text-center text-[11px] text-gray-400", children: "F4 to charge \u00B7 Ctrl+K to search" })] })] })] }), cart.length > 0 && (_jsxs("button", { onClick: () => window.scrollTo({ top: 0, behavior: 'smooth' }), className: "fixed inset-x-4 bottom-20 rounded-xl bg-primary-hover p-3 font-bold text-white shadow-lg lg:hidden", children: ["Cart \u00B7 ", count, " items \u00B7 ", formatPHP(estimate), " \u2014 review & charge"] })), receipt && (_jsx("div", { role: "dialog", "aria-modal": "true", "aria-label": `Receipt ${receipt.receipt_number}`, className: "fixed inset-0 z-50 flex items-end justify-center bg-black/40 print:static print:block print:bg-white sm:items-center", children: _jsxs("div", { className: "receipt-80 w-full max-w-sm rounded-t-2xl bg-white p-6 sm:rounded-2xl print:max-w-none print:rounded-none print:p-0 print:shadow-none", children: [_jsx("p", { className: "text-center font-bold", children: "VentaPOS" }), _jsx("p", { className: "text-center", children: receipt.receipt_number }), _jsxs("p", { className: "text-center text-gray-500", children: [new Date().toLocaleString(), " \u00B7 ", method.toUpperCase()] }), _jsx("hr", {}), receiptLines.map((i) => (_jsxs("p", { className: "flex justify-between", children: [_jsxs("span", { children: [i.product_name_snapshot, " \u00D7 ", i.quantity] }), _jsx("span", { children: formatPHP(i.line_total) })] }, i.id))), _jsx("hr", {}), _jsxs("div", { className: "mt-4 space-y-1 text-sm print:mt-0", children: [_jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Total" }), _jsx("span", { className: "font-bold", children: formatPHP(receipt.total) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsxs("span", { children: ["Paid (", method, ")"] }), _jsx("span", { children: formatPHP(receipt.paid) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Change" }), _jsx("span", { className: "font-bold", children: formatPHP(receipt.change) })] }), receipt.utang > 0 && (_jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "New balance" }), _jsx("span", { className: "font-bold", children: formatPHP(receipt.balance ?? 0) })] }))] }), _jsx("p", { className: "mt-2 hidden text-center print:block", children: "Thank you for shopping!" }), _jsxs("div", { className: "mt-5 grid grid-cols-2 gap-2 print:hidden", children: [_jsx("button", { className: "h-10 rounded-lg border border-gray-300 text-sm font-medium", onClick: () => {
+                                                        .map((q) => (_jsx("button", { className: "h-9 rounded-lg border border-gray-200 px-2 text-xs font-medium", onClick: () => setTendered(String(q)), children: q }, q)))] }), Number(tendered) >= estimate && estimate > 0 && (_jsxs("p", { className: "mt-2 text-sm", children: ["Change: ", _jsx("span", { className: "font-bold", children: formatPHP(Number(tendered) - estimate) })] }))] })), _jsxs("div", { className: "mt-3 grid grid-cols-[1fr_auto] gap-2", children: [_jsx(Link, { to: "/sales", className: "inline-flex h-12 items-center justify-center rounded-xl border border-gray-300 text-sm font-medium text-gray-700", children: "History" }), _jsx("button", { disabled: !canCharge || charging, onClick: () => checkout(), className: "inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-primary px-6 font-bold text-white disabled:opacity-40", children: charging ? 'Charging…' : `Checkout ${formatPHP(estimate)}` })] }), _jsx("p", { className: "mt-1 text-center text-[11px] text-gray-400", children: "F4 to charge \u00B7 Ctrl+K to search" })] })] })] }), cart.length > 0 && (_jsxs("button", { onClick: () => window.scrollTo({ top: 0, behavior: 'smooth' }), className: "fixed inset-x-4 bottom-20 rounded-xl bg-primary-hover p-3 font-bold text-white shadow-lg lg:hidden", children: ["Cart \u00B7 ", count, " items \u00B7 ", formatPHP(estimate), " \u2014 review & charge"] })), showClose && shift && (_jsx("div", { role: "dialog", "aria-modal": "true", "aria-label": "Close shift", className: "fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center", children: _jsxs("div", { className: "w-full max-w-sm rounded-t-2xl bg-white p-6 sm:rounded-2xl", children: [_jsx("p", { className: "font-bold", children: "Close shift" }), _jsx("p", { className: "mt-1 text-sm text-gray-500", children: "Count the cash drawer and enter the total." }), _jsxs("label", { className: "mt-3 block text-[13px] font-medium text-gray-600", children: ["Counted cash", _jsx("input", { className: "mt-1 h-11 w-full rounded-lg border border-gray-300 px-3 text-sm", placeholder: "\u20B1", inputMode: "decimal", value: closeCash, onChange: (e) => setCloseCash(e.target.value) })] }), _jsxs("label", { className: "mt-3 block text-[13px] font-medium text-gray-600", children: ["Notes (optional)", _jsx("input", { className: "mt-1 h-11 w-full rounded-lg border border-gray-300 px-3 text-sm", placeholder: "e.g. handed over to Aling Maria", value: closeNotes, onChange: (e) => setCloseNotes(e.target.value) })] }), _jsxs("div", { className: "mt-4 grid grid-cols-2 gap-2", children: [_jsx("button", { className: "h-10 rounded-lg border border-gray-300 text-sm font-medium", onClick: () => setShowClose(false), children: "Back" }), _jsx("button", { className: "h-10 rounded-lg bg-primary text-sm font-medium text-white disabled:opacity-40", disabled: shiftBusy || !closeCash, onClick: closeShift, children: shiftBusy ? 'Closing…' : 'Close + Z-report' })] })] }) })), zReport && (_jsx("div", { role: "dialog", "aria-modal": "true", "aria-label": "Z-report", className: "fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center", children: _jsxs("div", { className: "w-full max-w-sm rounded-t-2xl bg-white p-6 sm:rounded-2xl", children: [_jsx("p", { className: "text-center font-bold", children: "Z-Report" }), _jsxs("p", { className: "text-center text-sm text-gray-500", children: [zReport.z_report?.sales_count ?? 0, " sales \u00B7 Revenue", ' ', formatPHP(zReport.z_report?.revenue ?? 0)] }), _jsx("hr", {}), (zReport.z_report?.by_method ?? []).map((m) => (_jsxs("p", { className: "flex justify-between py-1 text-sm", children: [_jsx("span", { className: "capitalize", children: m.method }), _jsx("span", { children: formatPHP(m.total) })] }, m.method))), _jsx("hr", {}), _jsxs("div", { className: "mt-2 space-y-1 text-sm", children: [(zReport.z_report?.vat_collected ?? 0) > 0 && (_jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "VAT collected" }), _jsx("span", { children: formatPHP(zReport.z_report?.vat_collected ?? 0) })] })), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Opening float" }), _jsx("span", { children: formatPHP(zReport.z_report?.opening_float ?? 0) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Cash tendered" }), _jsx("span", { children: formatPHP(zReport.z_report?.cash_tendered ?? 0) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Change given" }), _jsx("span", { children: formatPHP(zReport.z_report?.change_given ?? 0) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Expected cash" }), _jsx("span", { className: "font-bold", children: formatPHP(zReport.expected_cash ?? 0) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Counted cash" }), _jsx("span", { className: "font-bold", children: formatPHP(zReport.counted_cash ?? 0) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Variance" }), _jsx(Badge, { tone: Number(zReport.variance) === 0 ? 'green' : 'red', children: formatPHP(Number(zReport.variance) || 0) })] })] }), _jsx("button", { className: "mt-4 h-10 w-full rounded-lg bg-primary text-sm font-medium text-white", onClick: () => setZReport(null), children: "Done \u2014 open a new shift to continue" })] }) })), receipt && (_jsx("div", { role: "dialog", "aria-modal": "true", "aria-label": `Receipt ${receipt.receipt_number}`, className: "fixed inset-0 z-50 flex items-end justify-center bg-black/40 print:static print:block print:bg-white sm:items-center", children: _jsxs("div", { className: "receipt-80 w-full max-w-sm rounded-t-2xl bg-white p-6 sm:rounded-2xl print:max-w-none print:rounded-none print:p-0 print:shadow-none", children: [_jsx("p", { className: "text-center font-bold", children: "VentaPOS" }), _jsx("p", { className: "text-center", children: receipt.receipt_number }), storeInfo && (_jsxs("p", { className: "text-center text-gray-500", children: [storeInfo.name, storeInfo.address ? ` · ${storeInfo.address}` : '', storeInfo.tin ? ` · TIN ${storeInfo.tin}` : ''] })), _jsxs("p", { className: "text-center text-gray-500", children: [new Date().toLocaleString(), " \u00B7 ", method.toUpperCase()] }), _jsx("hr", {}), receiptLines.map((i) => (_jsxs("p", { className: "flex justify-between", children: [_jsxs("span", { children: [i.product_name_snapshot, " \u00D7 ", i.unit_quantity ?? i.quantity, ' ', i.unit_name ?? 'pc'] }), _jsx("span", { children: formatPHP(i.line_total) })] }, i.id))), _jsx("hr", {}), _jsxs("div", { className: "mt-4 space-y-1 text-sm print:mt-0", children: [(receipt.tax_amount ?? 0) > 0 && (_jsxs(_Fragment, { children: [_jsxs("p", { className: "flex justify-between text-gray-500", children: [_jsx("span", { children: "VATABLE SALES" }), _jsx("span", { children: formatPHP(Math.round(((receipt.vatable_amount ?? 0) - (receipt.tax_amount ?? 0)) * 100) / 100) })] }), _jsxs("p", { className: "flex justify-between text-gray-500", children: [_jsxs("span", { children: ["VAT (", receipt.tax_rate ?? 12, "%)"] }), _jsx("span", { children: formatPHP(receipt.tax_amount ?? 0) })] }), _jsxs("p", { className: "flex justify-between text-gray-500", children: [_jsx("span", { children: "VAT EXEMPT" }), _jsx("span", { children: formatPHP(Math.round((receipt.total - (receipt.vatable_amount ?? 0)) * 100) / 100) })] })] })), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Total" }), _jsx("span", { className: "font-bold", children: formatPHP(receipt.total) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsxs("span", { children: ["Paid (", method, ")"] }), _jsx("span", { children: formatPHP(receipt.paid) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Change" }), _jsx("span", { className: "font-bold", children: formatPHP(receipt.change) })] }), receipt.utang > 0 && (_jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "New balance" }), _jsx("span", { className: "font-bold", children: formatPHP(receipt.balance ?? 0) })] }))] }), _jsx("p", { className: "mt-2 hidden text-center print:block", children: "Thank you for shopping!" }), _jsxs("div", { className: "mt-5 grid grid-cols-2 gap-2 print:hidden", children: [_jsx("button", { className: "h-10 rounded-lg border border-gray-300 text-sm font-medium", onClick: () => {
                                         setReceipt(null);
                                         setReceiptLines([]);
                                     }, children: "New sale" }), _jsx("button", { className: "h-10 rounded-lg bg-primary text-sm font-medium text-white", onClick: () => window.print(), children: "Print" })] })] }) }))] }));
