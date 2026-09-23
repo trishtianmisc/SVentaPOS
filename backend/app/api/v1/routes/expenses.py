@@ -89,6 +89,8 @@ def create_expense(
 ):
     o, s = _ctx(org_id, store)
     return SuccessResponse(
-        data=expense_service.create_expense(o, s, str(user.id), body.model_dump()),
+        data=expense_service.create_expense(
+            o, s, str(user.id), body.model_dump(mode="json")
+        ),
         message="Expense recorded",
     )

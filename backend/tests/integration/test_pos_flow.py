@@ -150,7 +150,7 @@ def ctx(client, monkeypatch):
     monkeypatch.setattr(notification_service, "notify", lambda *a, **k: None)
     monkeypatch.setattr(sale_service, "void_sale", fake_void)
     monkeypatch.setattr(sale_service, "list_sales",
-                        lambda o, s, limit=50: list(state["sales"].values()))
+                        lambda o, s, **k: list(state["sales"].values()))
     monkeypatch.setattr(
         sale_service, "get_sale",
         lambda o, s, i: {**state["sales"][i], "id": i, "items": [],

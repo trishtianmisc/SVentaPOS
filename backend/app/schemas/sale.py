@@ -61,6 +61,21 @@ class SaleDetail(BaseModel):
     created_at: str
     items: list[dict] = []
     payments: list[dict] = []
+    cashier_id: UUID | None = None
+    cashier_name: str | None = None
+    voided_by: UUID | None = None
+    voided_by_name: str | None = None
+    void_reason: str | None = None
+    # List/receipt enrichment (customer null → Walk-in in UI)
+    customer_id: UUID | None = None
+    customer_name: str | None = None
+    store_id: UUID | None = None
+    voided_at: str | None = None
+    items_count: int = 0
+    payment_method: str | None = None
+    paid: float | None = None
+    utang: float = 0
+    balance: float = 0
 
 
 class SaleVoid(BaseModel):

@@ -1,6 +1,6 @@
 """Read-only report aggregations. VAT-inclusive (Phase 6): revenue stays
 gross; tax_amount is carved out. Profit uses sale-item cost snapshots."""
-from datetime import date
+from app.core.timezone import created_at_local_day, local_today
 
 
 def _sb():
@@ -23,12 +23,12 @@ def sales(org_id: str, store_id: str, start: str | None, end: str | None) -> dic
             .eq("organization_id", org_id).eq("store_id", store_id)
             .eq("status", "COMPLETED").order("created_at", desc=True)
             .limit(1000).execute().data or [])
-    rows = [r for r in rows if _in_range((r["created_at"] or "")[:10], start, end)]
+    rows = [r for r in rows if _in_range(created_at_local_day(r.get("created_at")), start, end)]
     total = round(sum(float(r["total"]) for r in rows), 2)
     vat = round(sum(float(r.get("tax_amount") or 0) for r in rows), 2)
     by_day: dict[str, float] = {}
     for r in rows:
-        d = (r["created_at"] or "")[:10]
+        d = created_at_local_day(r.get("created_at"))
         by_day[d] = round(by_day.get(d, 0) + float(r["total"]), 2)
     pay_rows: list[dict] = []
     if rows:
@@ -54,7 +54,7 @@ def products(org_id: str, store_id: str, start: str | None, end: str | None) -> 
                   .eq("organization_id", org_id).eq("store_id", store_id)
                   .eq("status", "COMPLETED").limit(1000).execute().data or [])
     ids = [r["id"] for r in sales_rows
-           if _in_range((r.get("created_at") or "")[:10], start, end)]
+           if _in_range(created_at_local_day(r.get("created_at")), start, end)]
     if not ids:
         return []
     items = (sb.table("sale_items")
@@ -77,7 +77,7 @@ def profit(org_id: str, store_id: str, start: str | None, end: str | None) -> di
                   .eq("organization_id", org_id).eq("store_id", store_id)
                   .eq("status", "COMPLETED").limit(1000).execute().data or [])
     ids = [r["id"] for r in sales_rows
-           if _in_range((r.get("created_at") or "")[:10], start, end)]
+           if _in_range(created_at_local_day(r.get("created_at")), start, end)]
     revenue = cogs = 0.0
     if ids:
         items = (sb.table("sale_items")
@@ -110,7 +110,8 @@ def inventory(org_id: str, store_id: str) -> dict:
 
 def expenses(org_id: str, store_id: str, start: str | None, end: str | None) -> dict:
     sb = _sb()
-    rows = (sb.table("expenses").select("amount,category_id,expense_date")
+    rows = (sb.table("expenses")
+            .select("amount,category_id,expense_date,payment_method")
             .eq("organization_id", org_id).eq("store_id", store_id)
             .limit(1000).execute().data or [])
     rows = [r for r in rows if _in_range(r.get("expense_date") or "", start, end)]
@@ -118,14 +119,26 @@ def expenses(org_id: str, store_id: str, start: str | None, end: str | None) -> 
             .eq("organization_id", org_id).execute().data or [])
     names = {c["id"]: c["name"] for c in cats}
     by_c: dict[str, float] = {}
+    by_m: dict[str, float] = {}
+    by_d: dict[str, float] = {}
     total = 0.0
     for r in rows:
-        total += float(r["amount"])
+        amt = float(r["amount"])
+        total += amt
         k = names.get(r["category_id"], "Other")
-        by_c[k] = round(by_c.get(k, 0) + float(r["amount"]), 2)
+        by_c[k] = round(by_c.get(k, 0) + amt, 2)
+        m = r.get("payment_method") or "other"
+        by_m[m] = round(by_m.get(m, 0) + amt, 2)
+        day = r.get("expense_date") or ""
+        by_d[day] = round(by_d.get(day, 0) + amt, 2)
     return {"total": round(total, 2),
+            "count": len(rows),
+            "average": round(total / len(rows), 2) if rows else 0,
             "by_category": [{"category": k, "total": v}
                             for k, v in sorted(by_c.items())],
+            "by_method": [{"method": k, "total": v}
+                          for k, v in sorted(by_m.items())],
+            "by_day": [{"day": k, "total": v} for k, v in sorted(by_d.items())],
             "from": start or "", "to": end or ""}
 
 
@@ -146,7 +159,7 @@ def utang(org_id: str) -> dict:
     out.sort(key=lambda r: r["balance"], reverse=True)
     return {"total_outstanding": round(sum(r["balance"] for r in out), 2),
             "customers": out,
-            "as_of": date.today().isoformat()}
+            "as_of": local_today().isoformat()}
 
 
 # Consolidated (Phase 5): org-wide rollups reusing the per-store ----------
@@ -222,9 +235,26 @@ def consolidated_expenses(org_id: str, start: str | None,
         for row in p.get("by_category", []):
             by_c[row["category"]] = round(
                 by_c.get(row["category"], 0) + float(row["total"]), 2)
-    return {"total": round(sum(p["total"] for p in parts), 2),
+    by_m: dict[str, float] = {}
+    for p in parts:
+        for row in p.get("by_method", []):
+            by_m[row["method"]] = round(
+                by_m.get(row["method"], 0) + float(row["total"]), 2)
+    by_d: dict[str, float] = {}
+    for p in parts:
+        for row in p.get("by_day", []):
+            by_d[row["day"]] = round(
+                by_d.get(row["day"], 0) + float(row["total"]), 2)
+    count = sum(int(p.get("count") or 0) for p in parts)
+    total = round(sum(p["total"] for p in parts), 2)
+    return {"total": total,
+            "count": count,
+            "average": round(total / count, 2) if count else 0,
             "by_category": [{"category": k, "total": v}
                             for k, v in sorted(by_c.items())],
+            "by_method": [{"method": k, "total": v}
+                          for k, v in sorted(by_m.items())],
+            "by_day": [{"day": k, "total": v} for k, v in sorted(by_d.items())],
             "by_store": parts,
             "from": start or "", "to": end or ""}
 

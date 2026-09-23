@@ -30,3 +30,5 @@ class ExpenseRead(BaseModel):
     payment_method: str
     notes: str | None = None
     expense_date: str
+    created_by: UUID | None = None
+    created_by_name: str | None = None

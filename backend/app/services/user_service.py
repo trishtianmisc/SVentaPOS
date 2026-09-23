@@ -25,6 +25,49 @@ def _primary_role(roles: list[str]) -> str:
     return max(roles, key=lambda r: _ROLE_RANK.get(r, -1), default="")
 
 
+def display_names(user_ids) -> dict[str, str]:
+    """Batch id -> display name (profiles.full_name, else email local-part)."""
+    ids = {str(i) for i in user_ids if i}
+    if not ids:
+        return {}
+    try:
+        rows = (_sb().table("profiles").select("id,full_name")
+                .in_("id", sorted(ids)).execute().data or [])
+    except Exception:
+        rows = []
+    out: dict[str, str] = {}
+    for r in rows:
+        rid = str(r["id"])
+        out[rid] = (r.get("full_name") or "").strip() or rid[:8]
+    missing = ids - set(out)
+    if missing:
+        emails = _auth_emails(missing)
+        for uid in missing:
+            email = emails.get(uid)
+            out[uid] = (email or uid[:8]).split("@")[0] if email else uid[:8]
+    return out
+
+
+def enrich_actor_names(rows: list[dict], *fields: str) -> list[dict]:
+    """Attach `<field>_name` for each actor id field present on the rows."""
+    if not rows:
+        return rows
+    ids: set[str] = set()
+    for row in rows:
+        for f in fields:
+            if row.get(f):
+                ids.add(str(row[f]))
+    names = display_names(ids)
+    for row in rows:
+        for f in fields:
+            key = f"{f}_name"
+            if row.get(f):
+                row[key] = names.get(str(row[f]))
+            else:
+                row.setdefault(key, None)
+    return rows
+
+
 def _auth_admin():
     return _sb().auth.admin
 
@@ -104,9 +147,26 @@ def _auth_profiles(user_ids: set[str]) -> dict[str, dict]:
 
 
 def _org_stores(org_id: str) -> list[dict]:
-    res = (_sb().table("stores").select("id,name")
+    res = (_sb().table("stores")
+           .select("id,name,code,address,status,created_at")
            .eq("organization_id", org_id).order("created_at").execute())
     return res.data or []
+
+
+def branch_stores(org_id: str) -> list[dict]:
+    """All org branches for Owner Hub / Add Team Member (first = HQ)."""
+    stores = _org_stores(org_id)
+    return [
+        {
+            "id": s["id"],
+            "name": s.get("name") or "",
+            "code": s.get("code"),
+            "address": s.get("address"),
+            "status": s.get("status") or "active",
+            "is_hq": i == 0,
+        }
+        for i, s in enumerate(stores)
+    ]
 
 
 def _resolve_store_id(org_id: str, store_id: str | None) -> str:
@@ -124,7 +184,7 @@ def _resolve_store_id(org_id: str, store_id: str | None) -> str:
 def list_members(org_id: str, acting_user_id: str) -> list[dict]:
     sb = _sb()
     profiles = (sb.table("profiles")
-                .select("id,full_name,status,organization_id,created_at")
+                .select("id,full_name,phone,status,organization_id,created_at")
                 .eq("organization_id", org_id).order("created_at").execute().data or [])
     if not profiles:
         return []
@@ -154,6 +214,7 @@ def list_members(org_id: str, acting_user_id: str) -> list[dict]:
             "id": p["id"],
             "full_name": p.get("full_name"),
             "email": meta.get("email"),
+            "phone": p.get("phone"),
             "status": p.get("status") or "active",
             "role": role,
             "roles": [
@@ -180,7 +241,8 @@ def count_owners(org_id: str, exclude_user_id: str | None = None) -> int:
 
 
 def add_member(org_id: str, email: str, role: str,
-               store_id: str | None, acting_user_id: str) -> dict:
+               store_id: str | None, acting_user_id: str,
+               full_name: str | None = None, phone: str | None = None) -> dict:
     from app.api.v1.dependencies import invalidate_user_context
     from app.services import audit_service, subscription_service
 
@@ -190,6 +252,8 @@ def add_member(org_id: str, email: str, role: str,
     email = (email or "").strip()
     if not email:
         raise ValidationAppError("Email is required")
+    phone = (phone or "").strip() or None
+    full_name = (full_name or "").strip() or None
 
     sb = _sb()
     auth_user = find_auth_user_by_email(email)
@@ -198,7 +262,7 @@ def add_member(org_id: str, email: str, role: str,
             "No VentaPOS account with that email — ask them to register first, then try again")
     uid = str(auth_user["id"])
 
-    profile = (sb.table("profiles").select("id,full_name,organization_id,status")
+    profile = (sb.table("profiles").select("id,full_name,phone,organization_id,status")
                .eq("id", uid).maybe_single().execute())
     prof = profile.data if profile and profile.data else None
 
@@ -211,18 +275,20 @@ def add_member(org_id: str, email: str, role: str,
     sid = _resolve_store_id(org_id, store_id)
 
     meta = auth_user.get("user_metadata") or {}
-    full_name = (prof or {}).get("full_name") or meta.get("full_name") \
+    name = full_name or (prof or {}).get("full_name") or meta.get("full_name") \
         or email.split("@")[0]
+    next_phone = phone or (prof or {}).get("phone") or meta.get("phone")
 
     try:
         if prof:
-            sb.table("profiles").update({
-                "organization_id": org_id, "full_name": full_name,
-            }).eq("id", uid).execute()
+            patch = {"organization_id": org_id, "full_name": name}
+            if next_phone is not None:
+                patch["phone"] = next_phone
+            sb.table("profiles").update(patch).eq("id", uid).execute()
         else:
             sb.table("profiles").insert({
-                "id": uid, "organization_id": org_id, "full_name": full_name,
-                "status": "active",
+                "id": uid, "organization_id": org_id, "full_name": name,
+                "phone": next_phone, "status": "active",
             }).execute()
         sb.table("store_users").insert({
             "store_id": sid, "user_id": uid, "role": role,
@@ -238,11 +304,100 @@ def add_member(org_id: str, email: str, role: str,
         org_id, "user.add", "user", uid, user_id=acting_user_id,
         store_id=sid, metadata={"email": email, "role": role})
     return {
-        "id": uid, "full_name": full_name, "email": email, "status": "active",
-        "role": role,
+        "id": uid, "full_name": name, "email": email, "phone": next_phone,
+        "status": "active", "role": role,
         "roles": [{"store_id": sid, "role": role}],
         "is_self": str(uid) == str(acting_user_id),
         "last_login": auth_user.get("last_sign_in_at"),
+    }
+
+
+def create_member_with_password(
+    org_id: str, email: str, role: str, store_id: str | None,
+    acting_user_id: str, password: str,
+    full_name: str | None = None, phone: str | None = None,
+) -> dict:
+    """Owner sets credentials → Supabase Auth admin creates the account.
+
+    Returns an active member row (no invite). Falls back are handled by
+    the caller (invite_service) if Auth admin create fails.
+    """
+    from app.api.v1.dependencies import invalidate_user_context
+    from app.services import audit_service, subscription_service
+
+    role = (role or "").strip().lower()
+    if role not in ASSIGNABLE_ROLES:
+        raise ValidationAppError("Role must be owner, manager, cashier, or staff")
+    email = (email or "").strip()
+    if not email or "@" not in email:
+        raise ValidationAppError("Email is required")
+    if not password or len(password) < 6:
+        raise ValidationAppError("Password must be at least 6 characters")
+    name = (full_name or "").strip()
+    if not name:
+        raise ValidationAppError("Full name is required")
+    phone = (phone or "").strip() or None
+
+    sb = _sb()
+    existing = find_auth_user_by_email(email)
+    if existing:
+        # Already registered → attach path owns conflict checks.
+        return add_member(org_id, email, role, store_id, acting_user_id,
+                          full_name=name, phone=phone)
+
+    subscription_service.check_limit(org_id, "users")
+    sid = _resolve_store_id(org_id, store_id)
+
+    user_data: dict = {"full_name": name}
+    if phone:
+        user_data["phone"] = phone
+    try:
+        created = _auth_admin().create_user({
+            "email": email,
+            "password": password,
+            "email_confirm": True,
+            "user_data": user_data,
+        })
+    except Exception as e:
+        # Let invite_service fall back to an invite link on Auth failures.
+        raise RuntimeError(f"AUTH_CREATE_FAILED: {e}") from e
+
+    row = created.user if hasattr(created, "user") and created.user else created
+    raw = row.model_dump(mode="json") if hasattr(row, "model_dump") else (
+        row if isinstance(row, dict) else vars(row))
+    uid = str(raw.get("id") or "")
+    if not uid:
+        raise ValidationAppError("Could not create account, please retry")
+
+    try:
+        sb.table("profiles").insert({
+            "id": uid, "organization_id": org_id, "full_name": name,
+            "phone": phone, "status": "active",
+        }).execute()
+        sb.table("store_users").insert({
+            "store_id": sid, "user_id": uid, "role": role,
+        }).execute()
+    except Exception as e:
+        # Roll back the auth user so a retry can succeed cleanly.
+        try:
+            _auth_admin().delete_user(uid)
+        except Exception:
+            pass
+        msg = str(e).lower()
+        if "duplicate" in msg or "unique" in msg:
+            raise ConflictError("Already a member of this business") from e
+        raise ValidationAppError("Could not add user, please retry") from e
+
+    invalidate_user_context(uid)
+    audit_service.record(
+        org_id, "user.create", "user", uid, user_id=acting_user_id,
+        store_id=sid, metadata={"email": email, "role": role})
+    return {
+        "id": uid, "full_name": name, "email": email, "phone": phone,
+        "status": "active", "role": role,
+        "roles": [{"store_id": sid, "role": role}],
+        "is_self": str(uid) == str(acting_user_id),
+        "last_login": None,
     }
 
 

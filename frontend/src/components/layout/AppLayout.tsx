@@ -10,8 +10,8 @@ import type { FeatureKey } from '../../lib/role-perms';
 const NAV: { to: string; label: string; feature: FeatureKey }[] = [
   { to: '/pos', label: 'POS', feature: 'pos' },
   { to: '/products', label: 'Products', feature: 'inventory' },
-  { to: '/inventory', label: 'Stock', feature: 'inventory' },
   { to: '/sales', label: 'Sales', feature: 'sales' },
+  { to: '/shifts', label: 'Shifts', feature: 'pos' },
   { to: '/customers', label: 'Customers', feature: 'customers' },
   { to: '/suppliers', label: 'Suppliers', feature: 'suppliers' },
   { to: '/transfers', label: 'Transfers', feature: 'transfers' },
@@ -27,7 +27,6 @@ const NAV: { to: string; label: string; feature: FeatureKey }[] = [
 const TABS: { to: string; label: string; feature: FeatureKey }[] = [
   { to: '/pos', label: 'POS', feature: 'pos' },
   { to: '/products', label: 'Products', feature: 'inventory' },
-  { to: '/inventory', label: 'Stock', feature: 'inventory' },
   { to: '/sales', label: 'Sales', feature: 'sales' },
   { to: '/dashboard', label: 'More', feature: 'dashboard' },
 ];
@@ -77,7 +76,7 @@ export default function AppLayout() {
   };
 
   return (
-    <div className="min-h-dvh bg-gray-50 text-gray-900 md:flex">
+    <div className="min-h-dvh bg-gray-50 text-gray-900 md:flex dark:bg-[#0b0b0c] dark:text-[#e8e4dc]">
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-[70] focus:rounded-lg focus:bg-white focus:px-3 focus:py-2 focus:text-sm"
@@ -85,13 +84,15 @@ export default function AppLayout() {
         Skip to content
       </a>
       <ToastHost />
-      <aside className="hidden w-60 shrink-0 flex-col bg-slate-900 print:hidden md:flex">
-        <div className="border-b border-slate-800 px-5 py-4">
-          <p className="text-lg font-bold text-white">VentaPOS</p>
-          {stores.length > 1 ? (
+      <aside className="hidden w-60 shrink-0 flex-col border-r border-gray-200 bg-white print:hidden md:flex">
+        <div className="border-b border-gray-200 px-5 py-4">
+          <p className="text-lg font-bold text-primary-ink">VentaPOS</p>
+          {/* Owner picks a branch before entering (Owner Hub); once chosen,
+              do not re-prompt — show the active store name instead. */}
+          {stores.length > 1 && !storeId ? (
             <select
               aria-label="Active store"
-              className="mt-2 h-9 w-full rounded-lg border border-slate-700 bg-slate-800 px-2 text-[13px] text-slate-100"
+              className="mt-2 h-9 w-full rounded-lg border border-gray-300 bg-white px-2 text-[13px] text-gray-900"
               value={storeId ?? ''}
               onChange={(e) => pickStore(e.target.value)}
             >
@@ -103,9 +104,9 @@ export default function AppLayout() {
               ))}
             </select>
           ) : (
-          <p className="mt-1 truncate text-xs text-slate-400">
-            {storeName ?? 'Loading store…'} · {clock}
-          </p>
+            <p className="mt-1 truncate text-xs text-gray-500">
+              {storeName ?? 'Loading store…'} · {clock}
+            </p>
           )}
         </div>
         <nav className="flex flex-1 flex-col gap-1 p-3">
@@ -116,8 +117,8 @@ export default function AppLayout() {
               className={({ isActive }) =>
                 `rounded-lg px-3 py-2 text-sm ${
                   isActive
-                    ? 'bg-white/10 font-semibold text-white'
-                    : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+                    ? 'bg-primary-soft font-semibold text-primary-ink'
+                    : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
                 }`
               }
             >
@@ -125,10 +126,10 @@ export default function AppLayout() {
             </NavLink>
           ))}
         </nav>
-        <div className="border-t border-slate-800 p-4">
-          <p className="truncate text-xs text-slate-400">{email ?? ''}</p>
+        <div className="border-t border-gray-200 p-4">
+          <p className="truncate text-xs text-gray-500">{email ?? ''}</p>
           <button
-            className="mt-2 w-full rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-white/5"
+            className="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
             onClick={logout}
           >
             Sign out
@@ -139,7 +140,7 @@ export default function AppLayout() {
       {/* Content column */}
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Mobile top bar */}
-        <header className="flex items-center justify-between border-b bg-white px-4 py-3 print:hidden md:hidden">
+        <header className="flex items-center justify-between border-b bg-white px-4 py-3 print:hidden md:hidden dark:border-[#1a1a1e] dark:bg-[#0e0e10]">
           <span className="font-bold text-primary-ink">VentaPOS</span>
           <span className="truncate text-xs text-gray-500">
             {storeName ?? '…'} · {clock}
@@ -154,7 +155,7 @@ export default function AppLayout() {
         </main>
 
         {/* Mobile bottom tabs */}
-        <nav className="fixed inset-x-0 bottom-0 grid grid-cols-5 border-t bg-white print:hidden md:hidden">
+        <nav className="fixed inset-x-0 bottom-0 grid grid-cols-4 border-t bg-white print:hidden md:hidden dark:border-[#1a1a1e] dark:bg-[#0e0e10]">
           {tabItems.map((t) => (
             <NavLink
               key={t.to}

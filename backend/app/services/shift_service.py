@@ -15,7 +15,12 @@ def current(org_id: str, store_id: str) -> dict | None:
     res = (sb.table("shifts").select("*").eq("organization_id", org_id)
            .eq("store_id", store_id).eq("status", "OPEN")
            .maybe_single().execute())
-    return res.data if res and res.data else None
+    row = res.data if res and res.data else None
+    if not row:
+        return None
+    from app.services.user_service import enrich_actor_names
+    enrich_actor_names([row], "opened_by", "closed_by")
+    return row
 
 
 def list_shifts(org_id: str, store_id: str, limit: int = 20) -> list[dict]:
@@ -23,7 +28,8 @@ def list_shifts(org_id: str, store_id: str, limit: int = 20) -> list[dict]:
     res = (sb.table("shifts").select("*").eq("organization_id", org_id)
            .eq("store_id", store_id).order("opened_at", desc=True)
            .limit(limit).execute())
-    return res.data or []
+    from app.services.user_service import enrich_actor_names
+    return enrich_actor_names(res.data or [], "opened_by", "closed_by")
 
 
 def open_shift(org_id: str, store_id: str, user_id: str,
@@ -49,6 +55,8 @@ def open_shift(org_id: str, store_id: str, user_id: str,
     audit_service.record(org_id, "shift.open", "shift", shift["id"],
                          user_id=user_id, store_id=store_id,
                          metadata={"opening_float": shift["opening_float"]})
+    from app.services.user_service import enrich_actor_names
+    enrich_actor_names([shift], "opened_by", "closed_by")
     return shift
 
 
@@ -83,7 +91,19 @@ def _z_report(sb, org_id: str, store_id: str, opened_at: str,
             b = per_sale.get(s["id"], {"cash": 0.0, "paid": 0.0})
             cash_tendered += b["cash"]
             change_given += max(0.0, b["paid"] - float(s["total"]))
-    expected = round(opening_float + cash_tendered - change_given, 2)
+    expenses = (sb.table("expenses")
+                .select("amount,payment_method,created_at")
+                .eq("organization_id", org_id).eq("store_id", store_id)
+                .gte("created_at", opened_at).lt("created_at", closed_at)
+                .limit(500).execute().data or [])
+    cash_expenses = total_expenses = 0.0
+    for e in expenses:
+        amt = float(e["amount"])
+        total_expenses += amt
+        if (e.get("payment_method") or "") == "cash":
+            cash_expenses += amt
+    expected = round(
+        opening_float + cash_tendered - change_given - cash_expenses, 2)
     return {"sales_count": len(sales),
             "revenue": round(revenue, 2),
             "discounts": round(discounts, 2),
@@ -93,6 +113,8 @@ def _z_report(sb, org_id: str, store_id: str, opened_at: str,
             "cash_tendered": round(cash_tendered, 2),
             "change_given": round(change_given, 2),
             "opening_float": round(opening_float, 2),
+            "expenses_total": round(total_expenses, 2),
+            "cash_expenses": round(cash_expenses, 2),
             "expected_cash": expected}
 
 
@@ -130,4 +152,6 @@ def close_shift(org_id: str, store_id: str, user_id: str, shift_id: str,
                                    "variance": variance,
                                    "sales_count": z["sales_count"]})
     closed = upd.data[0]
+    from app.services.user_service import enrich_actor_names
+    enrich_actor_names([closed], "opened_by", "closed_by")
     return {**closed, "z_report": z}

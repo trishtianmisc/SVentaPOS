@@ -57,10 +57,12 @@ class _Fake:
     def in_(self, *a, **k):
         return self
 
-    def gte(self, *a, **k):
+    def gte(self, col, val):
+        self._gte = (col, val)
         return self
 
-    def lt(self, *a, **k):
+    def lt(self, col, val):
+        self._lt = (col, val)
         return self
 
     def maybe_single(self):
@@ -80,6 +82,12 @@ class _Fake:
         rows = list(self.s.get(self.n, []))
         for col, val in self._eq:
             rows = [r for r in rows if str(r.get(col)) == str(val)]
+        if getattr(self, "_gte", None):
+            col, val = self._gte
+            rows = [r for r in rows if str(r.get(col) or "") >= str(val)]
+        if getattr(self, "_lt", None):
+            col, val = self._lt
+            rows = [r for r in rows if str(r.get(col) or "") < str(val)]
         return rows
 
     def execute(self):
@@ -108,6 +116,7 @@ def _base_state():
             "wholesale_min_qty": None, "minimum_stock": 0, "reorder_level": 0,
             "track_inventory": False, "active": True, "vat_exempt": False}],
         "sales": [], "sale_payments": [], "audit": [],
+        "expenses": [], "expense_categories": [],
     }
 
 
@@ -205,6 +214,23 @@ def test_z_report_sums_vat(ctx6):
                                 "2026-09-23T00:00:00+00:00", 0)
     assert z["revenue"] == 162
     assert z["vat_collected"] == 12
+
+
+def test_z_report_deducts_cash_expenses(ctx6):
+    ctx6["expenses"] = [
+        {"organization_id": ORG, "store_id": STORE, "amount": 40,
+         "payment_method": "cash",
+         "created_at": "2026-09-22T12:00:00+00:00"},
+        {"organization_id": ORG, "store_id": STORE, "amount": 20,
+         "payment_method": "gcash",
+         "created_at": "2026-09-22T13:00:00+00:00"},
+    ]
+    z = shift_service._z_report(_Fake(ctx6), ORG, STORE,
+                                "2026-09-22T00:00:00+00:00",
+                                "2026-09-23T00:00:00+00:00", 500)
+    assert z["cash_expenses"] == 40
+    assert z["expenses_total"] == 60
+    assert z["expected_cash"] == 460
 
 
 def test_sales_report_rolls_up_vat(ctx6):

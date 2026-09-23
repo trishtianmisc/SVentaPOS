@@ -535,8 +535,8 @@ export default function ProductFormPage() {
               Track inventory (stock movements for this product)
             </label>
             <p className="text-xs text-gray-400">
-              Opening stock is adjusted from the Stock page. Inventory is
-              deducted in base units.
+              Opening stock is adjusted from Products → Adjust stock. Inventory
+              is deducted in base units.
             </p>
           </div>
         </Section>
@@ -546,7 +546,7 @@ export default function ProductFormPage() {
             <div className="flex items-start gap-3">
               <span
                 aria-hidden="true"
-                className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gray-900 text-gray-500"
+                className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gray-100 text-gray-500"
               >
                 {form.image_path ? (
                   <img

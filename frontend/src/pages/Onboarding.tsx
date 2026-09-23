@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api-client';
 import { useSessionStore } from '../stores/session';
+import { landingPathFor } from '../lib/role-perms';
 import { Button, Field, AuthShell, TextInput } from '../components/ui';
 
 export default function OnboardingPage() {
@@ -11,17 +12,36 @@ export default function OnboardingPage() {
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(true);
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const inviteToken = params.get('token');
 
-  // Accounts that already finished onboarding go straight to POS.
+  // Accounts that already finished onboarding go straight to POS / Owner Hub.
+  // Invite links skip "create my business" — accept joins an existing org.
   useEffect(() => {
+    if (inviteToken) {
+      navigate(`/accept-invite?token=${encodeURIComponent(inviteToken)}`, {
+        replace: true,
+      });
+      return;
+    }
     api
       .get('/auth/me')
-      .then((r) => {
-        if (r.data.data.organization_id) navigate('/pos', { replace: true });
-        else setChecking(false);
+      .then(async (r) => {
+        if (!r.data.data.organization_id) {
+          setChecking(false);
+          return;
+        }
+        let landing = '/pos';
+        try {
+          const stores = await api.get('/stores');
+          landing = landingPathFor(stores.data.data ?? []);
+        } catch {
+          // best-effort
+        }
+        navigate(landing, { replace: true });
       })
       .catch(() => setChecking(false));
-  }, [navigate]);
+  }, [navigate, inviteToken]);
 
   const submit = async () => {
     setMsg('');
@@ -38,7 +58,8 @@ export default function OnboardingPage() {
       const { organization, store: st } = res.data.data;
       localStorage.setItem('ventapos:orgId', organization.id);
       useSessionStore.getState().setStore(st.id);
-      navigate('/pos', { replace: true });
+      // Fresh org creators are owners → land on the Owner Hub.
+      navigate('/owner-hub', { replace: true });
     } catch (e: any) {
       setMsg(e.response?.data?.error?.message ?? 'Setup failed, please retry.');
     } finally {

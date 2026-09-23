@@ -7,9 +7,9 @@ import { useSessionStore, confirmStoreSwitch } from '../stores/session';
 
 const CARDS = [
   { to: '/pos', title: 'New sale', desc: 'POS cart + cash checkout' },
-  { to: '/products', title: 'Products', desc: 'Catalog management' },
-  { to: '/inventory', title: 'Inventory', desc: 'Stock levels + adjustments' },
-  { to: '/sales', title: 'Sales', desc: 'History + receipts' },
+  { to: '/products', title: 'Products', desc: 'Catalog + stock adjustments' },
+  { to: '/sales', title: 'Sales', desc: 'Transaction records + receipts' },
+  { to: '/shifts', title: 'Shifts', desc: 'Float, close-out, variance' },
   { to: '/customers', title: 'Customers', desc: 'Utang ledger + payments' },
   { to: '/suppliers', title: 'Suppliers', desc: 'Suppliers + purchase orders' },
   { to: '/transfers', title: 'Transfers', desc: 'Move stock between stores' },
@@ -70,7 +70,7 @@ export default function DashboardPage() {
           <p className="text-sm text-amber-800">
             {lowCount} product{lowCount === 1 ? '' : 's'} at or below reorder level.
           </p>
-          <Link to="/inventory">
+          <Link to="/products">
             <Badge tone="amber">Review stock</Badge>
           </Link>
         </div>
@@ -78,7 +78,7 @@ export default function DashboardPage() {
       <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
         <div className="grid content-start gap-4">
         <Section title="Active store">
-          {stores.length > 1 ? (
+          {stores.length > 1 && !storeId ? (
             <Select aria-label="Active store" value={storeId ?? ''} onChange={(e) => pick(e.target.value)}>
               <option value="">Select store…</option>
               {stores.map((s: any) => (
@@ -89,12 +89,16 @@ export default function DashboardPage() {
             </Select>
           ) : (
             <p className="text-sm text-gray-500">
-              {stores[0]?.name ?? 'Loading stores…'}
+              {stores.find((s: any) => s.id === storeId)?.name ??
+                stores[0]?.name ??
+                'Loading stores…'}
             </p>
           )}
-          <p className="mt-2 text-xs text-gray-400">
-            Switching stores reloads stock, sales, and balances for that store.
-          </p>
+          {stores.length > 1 && !storeId && (
+            <p className="mt-2 text-xs text-gray-400">
+              Switching stores reloads stock, sales, and balances for that store.
+            </p>
+          )}
         </Section>
         <Section title="Subscription">
           {sub ? (

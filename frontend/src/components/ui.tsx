@@ -22,9 +22,11 @@ export function Button({
 }: ButtonProps) {
   const heights = { compact: 'h-9', normal: 'h-10', large: 'h-12' } as const;
   const styles = {
-    primary: 'bg-primary text-white hover:bg-primary-hover',
-    secondary: 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-100',
-    danger: 'bg-red-700 text-white hover:bg-red-800',
+    primary:
+      'bg-primary text-white hover:bg-primary-hover dark:text-[#1a1010]',
+    secondary:
+      'border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 dark:border-[#2a2a2e] dark:bg-[#141416] dark:text-[#e8e4dc] dark:hover:bg-[#1c1c20]',
+    danger: 'bg-red-700 text-white hover:bg-red-800 dark:bg-red-800',
     ghost: 'text-primary hover:bg-primary-soft',
   } as const;
   return (
@@ -45,16 +47,26 @@ type FieldProps = {
 export function Field({ label, hint, error, children }: FieldProps) {
   return (
     <label className="block">
-      <span className="mb-1.5 block text-sm font-medium text-gray-700">{label}</span>
+      <span className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-[#c9c3b8]">
+        {label}
+      </span>
       {children}
-      {hint && !error && <span className="mt-1.5 block text-xs text-gray-400">{hint}</span>}
-      {error && <span className="mt-1.5 block text-xs text-red-600">{error}</span>}
+      {hint && !error && (
+        <span className="mt-1.5 block text-xs text-gray-400 dark:text-[#6f6a62]">
+          {hint}
+        </span>
+      )}
+      {error && (
+        <span className="mt-1.5 block text-xs text-red-600 dark:text-[#f0a090]">
+          {error}
+        </span>
+      )}
     </label>
   );
 }
 
 const inputCls =
-  'h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary';
+  'h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary dark:border-[#2a2a2e] dark:bg-[#121214] dark:text-[#f3efe8] dark:placeholder:text-[#5c5852]';
 
 export function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={`${inputCls} ${props.className ?? ''}`} />;
@@ -79,7 +91,7 @@ export function PasswordInput({
           e.preventDefault();
           setShow((v) => !v);
         }}
-        className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-1 focus:ring-primary"
+        className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-1 focus:ring-primary dark:text-[#6f6a62] dark:hover:text-[#c9c3b8]"
       >
         {show ? (
           <svg
@@ -127,10 +139,10 @@ type BadgeProps = {
 
 export function Badge({ tone = 'gray', children }: BadgeProps) {
   const tones = {
-    amber: 'bg-amber-100 text-amber-800',
-    red: 'bg-red-100 text-red-800',
-    green: 'bg-green-100 text-green-800',
-    gray: 'bg-gray-100 text-gray-600',
+    amber: 'bg-amber-100 text-amber-800 dark:bg-[#2a2210] dark:text-[#e8c86a]',
+    red: 'bg-red-100 text-red-800 dark:bg-[#2a1a1c] dark:text-[#f0a090]',
+    green: 'bg-green-100 text-green-800 dark:bg-[#123528] dark:text-[#3dd68c]',
+    gray: 'bg-gray-100 text-gray-600 dark:bg-[#1a1a1e] dark:text-[#9b958c]',
     brand: 'bg-primary-soft text-primary-ink',
   } as const;
   return (
@@ -152,10 +164,12 @@ export function Section({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-gray-200 bg-white p-4">
+    <section className="rounded-xl border border-gray-200 bg-white p-4 dark:border-[#1e1e22] dark:bg-[#121214]">
       {(title || action) && (
         <div className="mb-3 flex items-center justify-between">
-          {title && <h2 className="text-base font-semibold">{title}</h2>}
+          {title && (
+            <h2 className="text-base font-semibold dark:text-white">{title}</h2>
+          )}
           {action}
         </div>
       )}
@@ -176,8 +190,14 @@ export function PageHeader({
   return (
     <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
       <div>
-        <h1 className="text-xl font-semibold md:text-2xl">{title}</h1>
-        {sub && <p className="mt-1 text-[13px] text-gray-500">{sub}</p>}
+        <h1 className="text-xl font-semibold md:text-2xl dark:text-white">
+          {title}
+        </h1>
+        {sub && (
+          <p className="mt-1 text-[13px] text-gray-500 dark:text-[#9b958c]">
+            {sub}
+          </p>
+        )}
       </div>
       {actions}
     </div>
@@ -189,7 +209,7 @@ export function Table({ head, children }: { head: string[]; children: ReactNode 
     <div className="-mx-4 overflow-x-auto px-4">
       <table className="w-full text-left text-sm">
         <thead>
-          <tr className="border-b border-gray-200 text-xs text-gray-500">
+          <tr className="border-b border-gray-200 text-xs text-gray-500 dark:border-[#1e1e22] dark:text-[#6f6a62]">
             {head.map((h, i) => (
               <th
                 key={h}
@@ -203,7 +223,9 @@ export function Table({ head, children }: { head: string[]; children: ReactNode 
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-100">{children}</tbody>
+        <tbody className="divide-y divide-gray-100 dark:divide-[#1a1a1e]">
+          {children}
+        </tbody>
       </table>
     </div>
   );
@@ -211,8 +233,15 @@ export function Table({ head, children }: { head: string[]; children: ReactNode 
 
 export function Spinner({ label = 'Loading…' }: { label?: string }) {
   return (
-    <p role="status" aria-live="polite" className="py-3 text-sm text-gray-500">
-      <span aria-hidden="true" className="mr-2 inline-block h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-primary align-[-2px]" />
+    <p
+      role="status"
+      aria-live="polite"
+      className="py-3 text-sm text-gray-500 dark:text-[#9b958c]"
+    >
+      <span
+        aria-hidden="true"
+        className="mr-2 inline-block h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-primary align-[-2px] dark:border-[#2a2a2e]"
+      />
       {label}
     </p>
   );
@@ -221,15 +250,21 @@ export function Spinner({ label = 'Loading…' }: { label?: string }) {
 export function EmptyState({ title, hint }: { title: string; hint?: string }) {
   return (
     <div className="py-6 text-center">
-      <p className="text-sm font-medium text-gray-700">{title}</p>
-      {hint && <p className="mt-1 text-[13px] text-gray-400">{hint}</p>}
+      <p className="text-sm font-medium text-gray-700 dark:text-[#c9c3b8]">
+        {title}
+      </p>
+      {hint && (
+        <p className="mt-1 text-[13px] text-gray-400 dark:text-[#6f6a62]">
+          {hint}
+        </p>
+      )}
     </div>
   );
 }
 
 export function ListFooter({ count, noun }: { count: number; noun: string }) {
   return (
-    <p className="mt-3 text-xs text-gray-400">
+    <p className="mt-3 text-xs text-gray-400 dark:text-[#6f6a62]">
       Showing {count} {noun}
       {count === 1 ? '' : 's'}
     </p>
@@ -252,7 +287,10 @@ export function SearchInput({
       <label htmlFor={`search-${label}`} className="sr-only">
         {label}
       </label>
-      <span aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-[#6f6a62]"
+      >
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
           <circle cx="7" cy="7" r="5" />
           <line x1="11" y1="11" x2="14.5" y2="14.5" />
@@ -260,7 +298,7 @@ export function SearchInput({
       </span>
       <input
         id={`search-${label}`}
-        className="h-11 w-full rounded-lg border border-gray-300 bg-white pl-9 pr-9 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+        className="h-11 w-full rounded-lg border border-gray-300 bg-white pl-9 pr-9 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary dark:border-[#2a2a2e] dark:bg-[#121214] dark:text-[#f3efe8] dark:placeholder:text-[#5c5852]"
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -270,7 +308,7 @@ export function SearchInput({
           type="button"
           aria-label="Clear search"
           onClick={() => onChange('')}
-          className="absolute right-2 top-1/2 -translate-y-1/2 rounded px-2 py-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+          className="absolute right-2 top-1/2 -translate-y-1/2 rounded px-2 py-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:text-[#6f6a62] dark:hover:bg-[#1a1a1e] dark:hover:text-[#e8e4dc]"
         >
           ×
         </button>
@@ -284,11 +322,17 @@ export function Modal({
   onClose,
   children,
   wide,
+  header,
+  footer,
+  panelClassName = '',
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
+  header?: ReactNode;
+  footer?: ReactNode;
+  panelClassName?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -312,22 +356,31 @@ export function Modal({
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className={`max-h-[90dvh] w-full overflow-auto bg-white p-4 focus:outline-none sm:rounded-2xl md:p-6 ${
+        className={`flex max-h-[90dvh] w-full flex-col overflow-hidden bg-white focus:outline-none sm:rounded-2xl dark:bg-[#121214] dark:text-[#e8e4dc] ${
           wide ? 'max-w-lg' : 'max-w-sm rounded-t-2xl'
-        }`}
+        } ${panelClassName}`}
       >
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-base font-semibold">{title}</h2>
+        <div className="flex shrink-0 items-center justify-between gap-3 px-4 pt-4 md:px-6 md:pt-6">
+          {header ?? (
+            <h2 className="text-base font-semibold dark:text-white">{title}</h2>
+          )}
           <button
             type="button"
             aria-label="Close dialog"
             onClick={onClose}
-            className="rounded-lg px-2 py-1 text-xl leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+            className="shrink-0 rounded-lg px-2 py-1 text-xl leading-none text-gray-400 hover:bg-black/5 hover:text-gray-600 dark:text-[#6f6a62] dark:hover:bg-white/5 dark:hover:text-[#e8e4dc]"
           >
             ×
           </button>
         </div>
-        {children}
+        <div className="min-h-0 flex-1 overflow-auto px-4 pb-4 pt-3 md:px-6 md:pb-5">
+          {children}
+        </div>
+        {footer && (
+          <div className="shrink-0 border-t border-black/5 px-4 py-4 md:px-6 dark:border-[#1e1e22]">
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -461,9 +514,11 @@ export function ToastHost() {
   const toasts = useToastStore((s) => s.toasts);
   if (toasts.length === 0) return null;
   const tones = {
-    success: 'border-green-200 bg-green-50 text-green-800',
-    error: 'border-red-200 bg-red-50 text-red-800',
-    info: 'border-gray-200 bg-white text-gray-700',
+    success:
+      'border-green-200 bg-green-50 text-green-800 dark:border-[#123528] dark:bg-[#0f1a14] dark:text-[#3dd68c]',
+    error:
+      'border-red-200 bg-red-50 text-red-800 dark:border-[#3a2420] dark:bg-[#1a1210] dark:text-[#f0a090]',
+    info: 'border-gray-200 bg-white text-gray-700 dark:border-[#2a2a2e] dark:bg-[#121214] dark:text-[#e8e4dc]',
   } as const;
   return (
     <div aria-live="polite" className="pointer-events-none fixed inset-x-0 top-2 z-[60] mx-auto flex w-full max-w-sm flex-col gap-2 px-4">

@@ -6,7 +6,9 @@ suggested reorder quantity to reach `reorder_level + cover_target` days.
 Estimates only; every input is returned so the UI can show its work.
 """
 import math
-from datetime import date, timedelta
+from datetime import timedelta
+
+from app.core.timezone import local_day_bounds_utc, local_today
 
 
 COVER_TARGET_DAYS = 14
@@ -24,7 +26,8 @@ def forecast(org_id: str, store_id: str, window_days: int = 14) -> dict:
 
         raise ValidationAppError("Window must be 1-90 days")
     sb = _sb()
-    since = (date.today() - timedelta(days=window_days)).isoformat()
+    since_local = (local_today() - timedelta(days=window_days)).isoformat()
+    since, _ = local_day_bounds_utc(since_local)
 
     sales_rows = (sb.table("sales").select("id,created_at")
                   .eq("organization_id", org_id).eq("store_id", store_id)
@@ -74,7 +77,7 @@ def forecast(org_id: str, store_id: str, window_days: int = 14) -> dict:
             "suggested_qty": math.ceil(suggested) if suggested > 0 else 0,
         })
     rows.sort(key=lambda r: (r["days_cover"] is None, r["days_cover"] or 0))
-    return {"as_of": date.today().isoformat(),
+    return {"as_of": local_today().isoformat(),
             "window_days": window_days,
             "cover_target_days": COVER_TARGET_DAYS,
             "estimate": True,

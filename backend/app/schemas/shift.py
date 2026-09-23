@@ -24,3 +24,7 @@ class ShiftRead(BaseModel):
     variance: float | None = None
     notes: str | None = None
     z_report: dict | None = None
+    opened_by: UUID | None = None
+    opened_by_name: str | None = None
+    closed_by: UUID | None = None
+    closed_by_name: str | None = None

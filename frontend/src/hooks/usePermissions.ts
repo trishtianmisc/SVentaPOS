@@ -5,6 +5,7 @@ import { qk } from '../lib/query-keys';
 import {
   defaultMatrix,
   featureForPath,
+  isOwnerStores,
   matrixRoleFor,
   mergeMatrix,
   takeLegacyMatrix,
@@ -82,7 +83,8 @@ export function usePermissions() {
   }, [orgId, matrixQuery.data]);
 
   const matrix: PermMatrix = matrixQuery.data ?? defaultMatrix();
-  const isOwner = role === 'owner';
+  // Owner of ANY membership bypasses the matrix (mirrors backend require_feature).
+  const isOwner = role === 'owner' || isOwnerStores(storesQuery.data);
 
   const can = (feature: FeatureKey): boolean => {
     if (isOwner) return true;

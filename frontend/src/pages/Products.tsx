@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api-client';
 import { qk } from '../lib/query-keys';
 import {
   useCategories,
+  useInvalidateInventory,
   useInventory,
   useProducts,
   type Product,
@@ -30,6 +31,26 @@ import { useSessionStore } from '../stores/session';
 type StatusFilter = 'all' | 'active' | 'low' | 'out';
 type ViewMode = 'list' | 'grid';
 type StockStatus = 'active' | 'low' | 'out';
+
+type AdjustDir = 'in' | 'out';
+
+/** Chip reason → movement_type (API requires reason ≥3 chars). */
+const ADJUST_REASONS: {
+  value: string;
+  label: string;
+  movement: string;
+  dir: AdjustDir;
+}[] = [
+  { value: 'purchase', label: 'New purchase', movement: 'PURCHASE', dir: 'in' },
+  { value: 'customer_return', label: 'Customer return', movement: 'ADJUSTMENT', dir: 'in' },
+  { value: 'donation', label: 'Donation', movement: 'ADJUSTMENT', dir: 'in' },
+  { value: 'correction_in', label: 'Count adjustment', movement: 'ADJUSTMENT', dir: 'in' },
+  { value: 'damage', label: 'Damaged', movement: 'DAMAGE', dir: 'out' },
+  { value: 'expired', label: 'Expired', movement: 'EXPIRED', dir: 'out' },
+  { value: 'theft', label: 'Theft / loss', movement: 'ADJUSTMENT', dir: 'out' },
+  { value: 'sample', label: 'Sample / giveaway', movement: 'ADJUSTMENT', dir: 'out' },
+  { value: 'correction_out', label: 'Count adjustment', movement: 'ADJUSTMENT', dir: 'out' },
+];
 
 type Row = {
   product: Product;
@@ -117,7 +138,7 @@ function ProductThumb({ product }: { product: Product }) {
   return (
     <span
       aria-hidden="true"
-      className="relative inline-flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gray-900 text-gray-400"
+      className="relative inline-flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gray-100 text-gray-400"
     >
       {product.image_path && !broken ? (
         <img
@@ -176,6 +197,14 @@ export default function ProductsPage() {
   const [unitName, setUnitName] = useState('');
   const [unitFactor, setUnitFactor] = useState('');
   const [unitPrice, setUnitPrice] = useState('');
+  const [adjustOpen, setAdjustOpen] = useState(false);
+  const [adjusting, setAdjusting] = useState<Product | null>(null);
+  const [adjPreset, setAdjPreset] = useState(false);
+  const [adjDir, setAdjDir] = useState<AdjustDir>('in');
+  const [adjQty, setAdjQty] = useState(0);
+  const [adjReason, setAdjReason] = useState('');
+  const [adjTouched, setAdjTouched] = useState(false);
+  const invalidateInventory = useInvalidateInventory();
 
   // Top sellers → Popular badge/filter (best-effort; 403 on free plan is fine).
   const popularQ = useQuery({
@@ -285,6 +314,83 @@ export default function ProductsPage() {
     setEditCost(String((p as any).cost_price ?? ''));
     setEditExempt(!!p.vat_exempt);
     setMsg('');
+  };
+
+  const adjReasons = useMemo(
+    () => ADJUST_REASONS.filter((r) => r.dir === adjDir),
+    [adjDir],
+  );
+  const adjStock = adjusting
+    ? (stockByProduct.get(adjusting.id) ?? (adjusting.track_inventory ? 0 : null))
+    : null;
+  const adjNext =
+    adjStock == null
+      ? adjDir === 'in'
+        ? adjQty
+        : -adjQty
+      : adjDir === 'in'
+        ? adjStock + adjQty
+        : Math.max(0, adjStock - adjQty);
+  const adjUnit = 'pieces';
+  const adjHint =
+    !adjReason && adjTouched
+      ? 'Pick a reason'
+      : adjReason && adjQty <= 0
+        ? 'Enter a quantity'
+        : '';
+
+  const pickDir = (dir: AdjustDir) => {
+    if (dir === adjDir) return;
+    setAdjDir(dir);
+    setAdjReason('');
+    setMsg('');
+  };
+
+  const openAdjust = (p: Product | null) => {
+    setMenuFor(null);
+    setAdjustOpen(true);
+    setAdjPreset(!!p);
+    setAdjusting(p ?? items[0] ?? null);
+    setAdjDir('in');
+    setAdjQty(0);
+    setAdjReason('');
+    setAdjTouched(false);
+    setMsg('');
+  };
+
+  const closeAdjust = () => {
+    setAdjustOpen(false);
+    setAdjusting(null);
+    setMsg('');
+  };
+
+  const adjustM = useMutation({
+    mutationFn: () => {
+      if (!adjusting) throw new Error('No product');
+      const picked = adjReasons.find((r) => r.value === adjReason);
+      if (!picked) throw new Error('Pick a reason');
+      if (adjQty <= 0) throw new Error('Enter a quantity');
+      const signed = adjDir === 'in' ? adjQty : -adjQty;
+      return api.post('/inventory/adjust', {
+        product_id: adjusting.id,
+        quantity: signed,
+        movement_type: picked.movement,
+        reason: picked.label,
+      });
+    },
+    onSuccess: () => {
+      closeAdjust();
+      toast('success', adjDir === 'in' ? 'Stock added' : 'Stock removed');
+      invalidateInventory();
+    },
+    onError: (e: any) =>
+      setMsg(e.response?.data?.error?.message ?? 'Adjust failed'),
+  });
+
+  const submitAdjust = () => {
+    setAdjTouched(true);
+    if (!adjusting || !adjReason || adjQty <= 0 || adjustM.isPending) return;
+    adjustM.mutate();
   };
 
   const saveEdit = async () => {
@@ -426,6 +532,9 @@ export default function ProductsPage() {
           </Button>
           <Button variant="secondary" title="More actions" onClick={() => setMsg('')}>
             ··· More
+          </Button>
+          <Button variant="secondary" onClick={() => openAdjust(null)}>
+            Adjust stock
           </Button>
           <Button onClick={() => navigate('/products/new')}>+ Add</Button>
         </div>
@@ -808,6 +917,13 @@ export default function ProductsPage() {
                               </button>
                               <button
                                 type="button"
+                                className="block w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
+                                onClick={() => openAdjust(p)}
+                              >
+                                Adjust stock
+                              </button>
+                              <button
+                                type="button"
                                 className="block w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
                                 onClick={() => deactivate(p)}
                               >
@@ -833,7 +949,7 @@ export default function ProductsPage() {
                   key={p.id}
                   className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm"
                 >
-                  <div className="mb-3 flex h-28 items-center justify-center overflow-hidden rounded-xl bg-gray-900 text-gray-500">
+                  <div className="mb-3 flex h-28 items-center justify-center overflow-hidden rounded-xl bg-gray-100 text-gray-500">
                     {p.image_path ? (
                       <img
                         src={p.image_path}
@@ -993,6 +1109,276 @@ export default function ProductsPage() {
               </Button>
             </div>
             {msg && <p className="text-[13px] text-red-600">{msg}</p>}
+          </div>
+        </Modal>
+      )}
+
+      {adjustOpen && (
+        <Modal
+          title="Adjust stock"
+          onClose={closeAdjust}
+          wide
+          panelClassName="bg-[#FAF7F2]"
+          header={
+            <div className="flex min-w-0 items-center gap-3">
+              <span
+                aria-hidden="true"
+                className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#FCE8DE] text-[#E8794A]"
+              >
+                <svg
+                  width="22"
+                  height="22"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
+                  <path d="m3.3 7 8.7 5 8.7-5" />
+                  <path d="M12 22V12" />
+                </svg>
+              </span>
+              <div className="min-w-0">
+                <p className="text-base font-bold tracking-tight text-[#172033]">
+                  Adjust stock
+                </p>
+                <p className="truncate text-[13px] text-[#8b857c]">
+                  {adjusting?.name ?? 'Select product'}
+                </p>
+              </div>
+            </div>
+          }
+          footer={
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p
+                className={`text-sm ${
+                  adjHint || msg ? 'text-[#e8794a]' : 'text-transparent'
+                }`}
+                aria-live="polite"
+              >
+                {msg || adjHint || '·'}
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={closeAdjust}
+                  className="h-12 rounded-full border border-[#e5e0d8] bg-white px-6 text-sm font-semibold text-[#172033] hover:bg-[#f3efe8]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={adjustM.isPending || !adjusting || !adjReason || adjQty <= 0}
+                  onClick={submitAdjust}
+                  className="inline-flex h-12 items-center gap-2 rounded-full bg-[#f08a8a] px-6 text-sm font-semibold text-white shadow-sm hover:bg-[#e87a7a] disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M3 8.5 6.5 12 13 4" />
+                  </svg>
+                  {adjustM.isPending
+                    ? 'Saving…'
+                    : adjDir === 'in'
+                      ? 'Add stock'
+                      : 'Remove stock'}
+                </button>
+              </div>
+            </div>
+          }
+        >
+          <div className="grid gap-4">
+            {!items.length ? (
+              <p className="text-sm text-[#8b857c]">No products yet.</p>
+            ) : (
+              <>
+                {!adjPreset && (
+                  <div className="rounded-3xl bg-white p-5 shadow-[0_1px_2px_rgba(23,32,51,0.04)]">
+                    <label
+                      htmlFor="adj-product"
+                      className="mb-2 block text-xs font-bold uppercase tracking-[0.08em] text-[#8b857c]"
+                    >
+                      Product
+                    </label>
+                    <select
+                      id="adj-product"
+                      className="h-12 w-full rounded-2xl border border-[#e5e0d8] bg-white px-3 text-sm font-medium text-[#172033] focus:border-[#172033] focus:outline-none focus:ring-1 focus:ring-[#172033]"
+                      value={adjusting?.id ?? ''}
+                      onChange={(e) => {
+                        const next = items.find((p) => p.id === e.target.value);
+                        if (next) setAdjusting(next);
+                      }}
+                    >
+                      {items.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div className="rounded-3xl border border-gray-200 bg-gray-50 px-5 py-4 text-gray-900">
+                  <div className="flex items-end justify-between gap-3">
+                    <span className="text-sm font-medium text-gray-500">
+                      In stock now
+                    </span>
+                    <span className="flex items-baseline gap-1.5">
+                      <span className="text-3xl font-bold leading-none tracking-tight">
+                        {adjStock ?? 0}
+                      </span>
+                      <span className="text-sm text-gray-500">{adjUnit}</span>
+                    </span>
+                  </div>
+                </div>
+
+                <div className="rounded-3xl bg-white p-3 shadow-[0_1px_2px_rgba(23,32,51,0.04)]">
+                  <div
+                    role="group"
+                    aria-label="Stock direction"
+                    className="grid grid-cols-2 gap-2"
+                  >
+                    <button
+                      type="button"
+                      aria-pressed={adjDir === 'in'}
+                      onClick={() => pickDir('in')}
+                      className={`flex h-14 items-center justify-center gap-2 rounded-full text-[15px] font-semibold transition ${
+                        adjDir === 'in'
+                          ? 'bg-primary text-white shadow-sm'
+                          : 'border border-[#e5e0d8] bg-white text-[#172033] hover:bg-[#f7f3ec]'
+                      }`}
+                    >
+                      <svg
+                        width="18"
+                        height="18"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M16 7h6v6" />
+                        <path d="m22 7-8.5 8.5-5-5L2 17" />
+                      </svg>
+                      Stock in
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={adjDir === 'out'}
+                      onClick={() => pickDir('out')}
+                      className={`flex h-14 items-center justify-center gap-2 rounded-full text-[15px] font-semibold transition ${
+                        adjDir === 'out'
+                          ? 'bg-primary text-white shadow-sm'
+                          : 'border border-[#e5e0d8] bg-white text-[#172033] hover:bg-[#f7f3ec]'
+                      }`}
+                    >
+                      <svg
+                        width="18"
+                        height="18"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M16 17h6v-6" />
+                        <path d="m22 17-8.5-8.5-5 5L2 7" />
+                      </svg>
+                      Stock out
+                    </button>
+                  </div>
+                </div>
+
+                <div className="rounded-3xl bg-white p-5 shadow-[0_1px_2px_rgba(23,32,51,0.04)]">
+                  <p className="mb-3 text-xs font-bold uppercase tracking-[0.08em] text-[#8b857c]">
+                    Why
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {adjReasons.map((r) => {
+                      const on = adjReason === r.value;
+                      return (
+                        <button
+                          key={r.value}
+                          type="button"
+                          aria-pressed={on}
+                          onClick={() => {
+                            setAdjReason(r.value);
+                            setAdjTouched(true);
+                            setMsg('');
+                          }}
+                          className={`rounded-full border px-4 py-2.5 text-sm font-medium transition ${
+                            on
+                              ? 'border-primary bg-primary text-white'
+                              : 'border-[#e5e0d8] bg-white text-[#172033] hover:border-[#cfc8bd] hover:bg-[#f7f3ec]'
+                          }`}
+                        >
+                          {r.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="rounded-3xl bg-white p-5 shadow-[0_1px_2px_rgba(23,32,51,0.04)]">
+                  <p className="mb-3 text-xs font-bold uppercase tracking-[0.08em] text-[#8b857c]">
+                    How many pieces
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      aria-label="Decrease quantity"
+                      onClick={() => setAdjQty((q) => Math.max(0, q - 1))}
+                      className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-[#e5e0d8] bg-white text-2xl leading-none text-[#172033] hover:bg-[#f7f3ec]"
+                    >
+                      −
+                    </button>
+                    <input
+                      aria-label="Quantity"
+                      inputMode="numeric"
+                      className="h-14 min-w-0 flex-1 rounded-2xl border border-[#e5e0d8] bg-white text-center text-xl font-bold text-[#172033] focus:border-[#172033] focus:outline-none focus:ring-1 focus:ring-[#172033]"
+                      value={adjQty === 0 ? '0' : String(adjQty)}
+                      onChange={(e) => {
+                        const n = parseInt(e.target.value.replace(/\D/g, ''), 10);
+                        setAdjQty(Number.isFinite(n) ? Math.max(0, n) : 0);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      aria-label="Increase quantity"
+                      onClick={() => setAdjQty((q) => q + 1)}
+                      className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-[#e5e0d8] bg-white text-2xl leading-none text-[#172033] hover:bg-[#f7f3ec]"
+                    >
+                      +
+                    </button>
+                  </div>
+                  <p className="mt-2 text-[13px] text-[#8b857c]">
+                    Whole pieces only.
+                  </p>
+                  <div className="mt-3 flex items-center gap-2 rounded-2xl bg-[#f0ebe3] px-4 py-3.5 text-sm text-[#5c574f]">
+                    <span className="font-medium">{adjStock ?? 0}</span>
+                    <span aria-hidden="true">→</span>
+                    <span className="text-xl font-bold text-[#172033]">
+                      {adjNext}
+                    </span>
+                    <span className="text-[#8b857c]">{adjUnit}</span>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </Modal>
       )}

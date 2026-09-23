@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api-client';
 import { qk } from '../lib/query-keys';
 import { formatPHP } from '../utils/currency';
 import { Badge, toast } from '../components/ui';
+import {
+  Receipt as SharedReceipt,
+  type ReceiptSale,
+} from '../components/Receipt';
 import { useSessionStore } from '../stores/session';
 import {
   baseEquivalent,
@@ -33,39 +36,7 @@ interface CartLine {
   /** Sell unit; base unit is implicit (today 'pc'). Line qty is in this unit. */
   unit: string;
 }
-interface Receipt {
-  receipt_number: string;
-  total: number;
-  paid: number;
-  change: number;
-  status: string;
-  tax_amount?: number;
-  tax_rate?: number;
-  vatable_amount?: number;
-  subtotal?: number;
-  discount_amount?: number;
-  utang?: number;
-  balance?: number;
-  created_at?: string;
-}
-
-/** Thermal receipt helpers (screen + print share the same monospace look). */
-function shortDate(d: Date) {
-  return `${d.getMonth() + 1}/${d.getDate()}/${String(d.getFullYear()).slice(2)}`;
-}
-function longDate(d: Date) {
-  return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
-}
-function shortTime(d: Date) {
-  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-}
-function longTime(d: Date) {
-  return d.toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  });
-}
+type Receipt = ReceiptSale;
 
 const METHODS = ['cash', 'gcash', 'maya', 'card', 'bank', 'other', 'utang'] as const;
 const NEEDS_REF = new Set(['gcash', 'maya', 'card', 'bank']);
@@ -268,6 +239,12 @@ export default function POSPage() {
   const [discFor, setDiscFor] = useState<string | null>(null);
   const [discVal, setDiscVal] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
+  const clearReceipt = () => {
+    setReceipt(null);
+    setReceiptLines([]);
+    setReceiptAt(null);
+    setReceiptPays([]);
+  };
 
   // Shift gate (Phase 4): checkout requires an open shift.
   const [shift, setShift] = useState<any>(null);
@@ -334,15 +311,11 @@ export default function POSPage() {
   useEffect(() => {
     if (!receipt) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setReceipt(null);
-        setReceiptLines([]);
-        setReceiptAt(null);
-        setReceiptPays([]);
-      }
+      if (e.key === 'Escape') clearReceipt();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [receipt]);
 
   // Register shortcuts: Ctrl+K focuses search, F4 charges when ready.
@@ -668,6 +641,7 @@ export default function POSPage() {
                 hour: '2-digit',
                 minute: '2-digit',
               })}
+              {shift.opened_by_name ? ` · ${shift.opened_by_name}` : ''}
             </span>
             <button
               type="button"
@@ -1284,6 +1258,18 @@ export default function POSPage() {
                 <span>Change given</span>
                 <span>{formatPHP(zReport.z_report?.change_given ?? 0)}</span>
               </p>
+              {(zReport.z_report?.expenses_total ?? 0) > 0 && (
+                <p className="flex justify-between">
+                  <span>Expenses</span>
+                  <span>{formatPHP(zReport.z_report?.expenses_total ?? 0)}</span>
+                </p>
+              )}
+              {(zReport.z_report?.cash_expenses ?? 0) > 0 && (
+                <p className="flex justify-between text-rose-600">
+                  <span>Cash paid out</span>
+                  <span>-{formatPHP(zReport.z_report?.cash_expenses ?? 0)}</span>
+                </p>
+              )}
               <p className="flex justify-between">
                 <span>Expected cash</span>
                 <span className="font-bold">{formatPHP(zReport.expected_cash ?? 0)}</span>
@@ -1309,198 +1295,26 @@ export default function POSPage() {
         </div>
       )}
 
-      {/* Receipt modal — thermal monospace layout (portal: print isolates to body) */}
-      {receipt &&
-        createPortal(
-          <div
-            id="rcpt-portal"
-            role="dialog"
-            aria-modal="true"
-            aria-label={`Receipt ${receipt.receipt_number}`}
-            className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/40 print:static print:block print:bg-transparent sm:items-center"
-          >
-            <div className="receipt-80 w-full max-w-sm rounded-t-2xl bg-white p-6 sm:rounded-2xl print:max-w-none print:rounded-none print:p-0 print:shadow-none">
-            {(() => {
-              const at = receiptAt ?? new Date();
-              const tax = Number(receipt.tax_amount ?? 0);
-              const rate = Number(receipt.tax_rate ?? 0);
-              // Image layout: Subtotal + VAT = TOTAL (VAT exclusive presentation).
-              // VentaPOS is inclusive: show pre-tax base when tax carved out.
-              const subtotal =
-                receipt.subtotal != null
-                  ? Number(receipt.subtotal)
-                  : Math.round((receipt.total - tax) * 100) / 100;
-              const addressLines = (storeInfo?.address ?? '')
-                .split(',')
-                .map((s: string) => s.trim())
-                .filter(Boolean);
-              const qtyOf = (i: any) =>
-                i.unit_quantity ?? i.quantity ?? 0;
-              const unitOf = (i: any) => i.unit_name ?? 'pc';
-              return (
-                <>
-                  {/* Header: short date/time left, short receipt # right */}
-                  <div className="flex justify-between text-[11px] leading-tight">
-                    <span>
-                      {shortDate(at)}, {shortTime(at)}
-                    </span>
-                    <span>{receipt.receipt_number}</span>
-                  </div>
-
-                  {/* Store */}
-                  <div className="mt-2 text-center leading-tight">
-                    <p className="font-bold uppercase tracking-wide">
-                      {storeInfo?.name ?? 'Store'}
-                    </p>
-                    {addressLines.map((line: string, idx: number) => (
-                      <p key={idx} className="text-[11px]">
-                        {line}
-                      </p>
-                    ))}
-                  </div>
-
-                  <div className="rcpt-sep" />
-
-                  {/* Meta rows */}
-                  <div className="rcpt-row">
-                    <span>Receipt #:</span>
-                    <span>{receipt.receipt_number}</span>
-                  </div>
-                  <div className="rcpt-row">
-                    <span>Date:</span>
-                    <span>{longDate(at)}</span>
-                  </div>
-                  <div className="rcpt-row">
-                    <span>Time:</span>
-                    <span>{longTime(at)}</span>
-                  </div>
-                  <div className="rcpt-row">
-                    <span>Cashier:</span>
-                    <span>{cashierName || '—'}</span>
-                  </div>
-
-                  <div className="rcpt-sep" />
-
-                  {/* Line items */}
-                  {receiptLines.length === 0 && (
-                    <p className="py-1 text-center text-[11px] text-gray-500">
-                      Loading items…
-                    </p>
-                  )}
-                  {receiptLines.map((i: any) => (
-                    <div key={i.id} className="mb-1">
-                      <div className="rcpt-row">
-                        <span className="min-w-0 truncate pr-2">
-                          {i.product_name_snapshot}
-                        </span>
-                        <span className="shrink-0">{formatPHP(i.line_total)}</span>
-                      </div>
-                      <div className="pl-3 text-[11px]">
-                        {formatQty(Number(qtyOf(i)))} ×{' '}
-                        {formatPHP(i.unit_price ?? 0)}{' '}
-                        {unitOf(i) !== 'pc' ? unitOf(i) : ''}
-                      </div>
-                    </div>
-                  ))}
-
-                  <div className="rcpt-sep" />
-
-                  {/* Totals */}
-                  <div className="rcpt-row">
-                    <span>Subtotal:</span>
-                    <span>{formatPHP(subtotal)}</span>
-                  </div>
-                  {tax > 0 && (
-                    <div className="rcpt-row">
-                      <span>VAT (Added {rate || 12}%):</span>
-                      <span>{formatPHP(tax)}</span>
-                    </div>
-                  )}
-                  {(receipt.discount_amount ?? 0) > 0 && (
-                    <div className="rcpt-row">
-                      <span>Discount:</span>
-                      <span>−{formatPHP(receipt.discount_amount ?? 0)}</span>
-                    </div>
-                  )}
-                  <div className="rcpt-row font-bold">
-                    <span>TOTAL:</span>
-                    <span>{formatPHP(receipt.total)}</span>
-                  </div>
-
-                  <div className="rcpt-sep" />
-
-                  {/* Payment */}
-                  {(receiptPays.length
-                    ? receiptPays
-                    : [{ payment_method: method, amount: receipt.paid }]
-                  ).map((p: any, idx: number) => (
-                    <div key={idx} className="rcpt-row">
-                      <span>{idx === 0 ? 'Payment:' : ''}</span>
-                      <span className="capitalize">
-                        {p.payment_method ?? method}
-                      </span>
-                    </div>
-                  ))}
-                  <div className="rcpt-row">
-                    <span>Cash:</span>
-                    <span>{formatPHP(receipt.paid ?? receipt.total)}</span>
-                  </div>
-                  {(receipt.change ?? 0) > 0 && (
-                    <div className="rcpt-row">
-                      <span>Change:</span>
-                      <span>{formatPHP(receipt.change)}</span>
-                    </div>
-                  )}
-                  {(receipt.utang ?? 0) > 0 && (
-                    <div className="rcpt-row">
-                      <span>Balance:</span>
-                      <span>{formatPHP(receipt.balance ?? 0)}</span>
-                    </div>
-                  )}
-
-                  <div className="rcpt-sep" />
-
-                  {/* Footer */}
-                  <p className="mt-1 text-center text-[11px]">
-                    Thank you for your business!
-                  </p>
-                  <p className="mt-3 text-center text-[11px] leading-snug">
-                    Not valid for tax claim.
-                    <br />
-                    For internal record only.
-                  </p>
-                  <p className="mt-3 text-center text-[10px] leading-snug text-gray-500">
-                    Powered by VentaPOS
-                    <br />
-                    Multi-unit selling ready
-                  </p>
-                </>
-              );
-            })()}
-
-            <div className="mt-5 grid grid-cols-2 gap-2 print:hidden">
-              <button
-                className="h-10 rounded-lg border border-gray-300 text-sm font-medium"
-                onClick={() => {
-                  setReceipt(null);
-                  setReceiptLines([]);
-                  setReceiptAt(null);
-                  setReceiptPays([]);
-                }}
-              >
-                New sale
-              </button>
-              <button
-                className="h-10 rounded-lg bg-primary text-sm font-medium text-white"
-                onClick={() => window.print()}
-              >
-                Print
-              </button>
-            </div>
-          </div>
-          </div>,
-          document.body,
-        )}
+      {/* Receipt modal — shared thermal component (portal: print isolates to body) */}
+      {receipt && (
+        <SharedReceipt
+          sale={receipt}
+          items={receiptLines}
+          payments={receiptPays}
+          storeInfo={storeInfo}
+          cashierName={cashierName}
+          method={method}
+          at={receiptAt}
+          closeLabel="New sale"
+          printLabel="Print"
+          onClose={clearReceipt}
+          onCloseExtra={() => {
+            setReceiptLines([]);
+            setReceiptAt(null);
+            setReceiptPays([]);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -1,14 +1,26 @@
-import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api-client';
 import { qk } from '../lib/query-keys';
-import { useCategories, useInventory, useProducts, } from '../hooks/useCatalog';
+import { useCategories, useInvalidateInventory, useInventory, useProducts, } from '../hooks/useCatalog';
 import { Badge, Button, EmptyState, Field, ListFooter, Modal, SearchInput, Section, Select, Spinner, TextInput, toast, } from '../components/ui';
 import { formatPHP } from '../utils/currency';
 import { useAuthStore } from '../stores/auth-store';
 import { useSessionStore } from '../stores/session';
+/** Chip reason → movement_type (API requires reason ≥3 chars). */
+const ADJUST_REASONS = [
+    { value: 'purchase', label: 'New purchase', movement: 'PURCHASE', dir: 'in' },
+    { value: 'customer_return', label: 'Customer return', movement: 'ADJUSTMENT', dir: 'in' },
+    { value: 'donation', label: 'Donation', movement: 'ADJUSTMENT', dir: 'in' },
+    { value: 'correction_in', label: 'Count adjustment', movement: 'ADJUSTMENT', dir: 'in' },
+    { value: 'damage', label: 'Damaged', movement: 'DAMAGE', dir: 'out' },
+    { value: 'expired', label: 'Expired', movement: 'EXPIRED', dir: 'out' },
+    { value: 'theft', label: 'Theft / loss', movement: 'ADJUSTMENT', dir: 'out' },
+    { value: 'sample', label: 'Sample / giveaway', movement: 'ADJUSTMENT', dir: 'out' },
+    { value: 'correction_out', label: 'Count adjustment', movement: 'ADJUSTMENT', dir: 'out' },
+];
 function stockStatus(p, qty) {
     if (!p.track_inventory)
         return 'active';
@@ -84,7 +96,7 @@ function exportCsv(rows) {
 }
 function ProductThumb({ product }) {
     const [broken, setBroken] = useState(false);
-    return (_jsx("span", { "aria-hidden": "true", className: "relative inline-flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gray-900 text-gray-400", children: product.image_path && !broken ? (_jsx("img", { src: product.image_path, alt: "", className: "h-full w-full object-cover", onError: () => setBroken(true) })) : (_jsxs("svg", { width: "18", height: "18", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.5", children: [_jsx("rect", { x: "3", y: "5", width: "18", height: "14", rx: "2" }), _jsx("circle", { cx: "9", cy: "11", r: "2" }), _jsx("path", { d: "m21 16-5-5-4 4-2-2-5 5" })] })) }));
+    return (_jsx("span", { "aria-hidden": "true", className: "relative inline-flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gray-100 text-gray-400", children: product.image_path && !broken ? (_jsx("img", { src: product.image_path, alt: "", className: "h-full w-full object-cover", onError: () => setBroken(true) })) : (_jsxs("svg", { width: "18", height: "18", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.5", children: [_jsx("rect", { x: "3", y: "5", width: "18", height: "14", rx: "2" }), _jsx("circle", { cx: "9", cy: "11", r: "2" }), _jsx("path", { d: "m21 16-5-5-4 4-2-2-5 5" })] })) }));
 }
 function StatusBadge({ status }) {
     if (status === 'out')
@@ -118,6 +130,14 @@ export default function ProductsPage() {
     const [unitName, setUnitName] = useState('');
     const [unitFactor, setUnitFactor] = useState('');
     const [unitPrice, setUnitPrice] = useState('');
+    const [adjustOpen, setAdjustOpen] = useState(false);
+    const [adjusting, setAdjusting] = useState(null);
+    const [adjPreset, setAdjPreset] = useState(false);
+    const [adjDir, setAdjDir] = useState('in');
+    const [adjQty, setAdjQty] = useState(0);
+    const [adjReason, setAdjReason] = useState('');
+    const [adjTouched, setAdjTouched] = useState(false);
+    const invalidateInventory = useInvalidateInventory();
     // Top sellers → Popular badge/filter (best-effort; 403 on free plan is fine).
     const popularQ = useQuery({
         queryKey: ['reports', 'products', storeId ?? 'none', userId ?? 'anon'],
@@ -207,6 +227,76 @@ export default function ProductsPage() {
         setEditCost(String(p.cost_price ?? ''));
         setEditExempt(!!p.vat_exempt);
         setMsg('');
+    };
+    const adjReasons = useMemo(() => ADJUST_REASONS.filter((r) => r.dir === adjDir), [adjDir]);
+    const adjStock = adjusting
+        ? (stockByProduct.get(adjusting.id) ?? (adjusting.track_inventory ? 0 : null))
+        : null;
+    const adjNext = adjStock == null
+        ? adjDir === 'in'
+            ? adjQty
+            : -adjQty
+        : adjDir === 'in'
+            ? adjStock + adjQty
+            : Math.max(0, adjStock - adjQty);
+    const adjUnit = 'pieces';
+    const adjHint = !adjReason && adjTouched
+        ? 'Pick a reason'
+        : adjReason && adjQty <= 0
+            ? 'Enter a quantity'
+            : '';
+    const pickDir = (dir) => {
+        if (dir === adjDir)
+            return;
+        setAdjDir(dir);
+        setAdjReason('');
+        setMsg('');
+    };
+    const openAdjust = (p) => {
+        setMenuFor(null);
+        setAdjustOpen(true);
+        setAdjPreset(!!p);
+        setAdjusting(p ?? items[0] ?? null);
+        setAdjDir('in');
+        setAdjQty(0);
+        setAdjReason('');
+        setAdjTouched(false);
+        setMsg('');
+    };
+    const closeAdjust = () => {
+        setAdjustOpen(false);
+        setAdjusting(null);
+        setMsg('');
+    };
+    const adjustM = useMutation({
+        mutationFn: () => {
+            if (!adjusting)
+                throw new Error('No product');
+            const picked = adjReasons.find((r) => r.value === adjReason);
+            if (!picked)
+                throw new Error('Pick a reason');
+            if (adjQty <= 0)
+                throw new Error('Enter a quantity');
+            const signed = adjDir === 'in' ? adjQty : -adjQty;
+            return api.post('/inventory/adjust', {
+                product_id: adjusting.id,
+                quantity: signed,
+                movement_type: picked.movement,
+                reason: picked.label,
+            });
+        },
+        onSuccess: () => {
+            closeAdjust();
+            toast('success', adjDir === 'in' ? 'Stock added' : 'Stock removed');
+            invalidateInventory();
+        },
+        onError: (e) => setMsg(e.response?.data?.error?.message ?? 'Adjust failed'),
+    });
+    const submitAdjust = () => {
+        setAdjTouched(true);
+        if (!adjusting || !adjReason || adjQty <= 0 || adjustM.isPending)
+            return;
+        adjustM.mutate();
     };
     const saveEdit = async () => {
         if (!editing)
@@ -308,7 +398,7 @@ export default function ProductsPage() {
         });
     };
     const thCls = 'px-3 py-2.5 text-left text-xs font-medium text-gray-500 first:pl-0 last:pr-0';
-    return (_jsxs("div", { className: "w-full p-4 md:p-6", children: [_jsxs("div", { className: "mb-5 flex flex-wrap items-start justify-between gap-3", children: [_jsxs("div", { className: "flex items-start gap-3", children: [_jsx("span", { "aria-hidden": "true", className: "inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700", children: _jsxs("svg", { width: "22", height: "22", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round", children: [_jsx("path", { d: "M5 7h14l-1.4 13H6.4L5 7Z" }), _jsx("path", { d: "M9 7V6a3 3 0 0 1 6 0v1" })] }) }), _jsxs("div", { children: [_jsx("h1", { className: "text-xl font-semibold tracking-tight md:text-2xl", children: "Product Management" }), _jsx("p", { className: "mt-0.5 text-[13px] text-gray-500", children: "Manage inventory and product catalog" })] })] }), _jsxs("div", { className: "flex flex-wrap items-center gap-2", children: [_jsx(Button, { variant: "secondary", onClick: () => exportCsv(visible), disabled: visible.length === 0, children: "\u2193 Export" }), _jsx(Button, { variant: "secondary", title: "More actions", onClick: () => setMsg(''), children: "\u00B7\u00B7\u00B7 More" }), _jsx(Button, { onClick: () => navigate('/products/new'), children: "+ Add" })] })] }), msg && (_jsx("p", { className: "mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700", children: msg })), _jsxs("div", { className: "mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4", children: [_jsxs("button", { type: "button", onClick: clearFilters, className: `flex items-center gap-3 rounded-2xl border px-4 py-3 text-left transition ${statusFilter === 'all' && !popularOnly && !search && categoryFilter === 'all'
+    return (_jsxs("div", { className: "w-full p-4 md:p-6", children: [_jsxs("div", { className: "mb-5 flex flex-wrap items-start justify-between gap-3", children: [_jsxs("div", { className: "flex items-start gap-3", children: [_jsx("span", { "aria-hidden": "true", className: "inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700", children: _jsxs("svg", { width: "22", height: "22", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round", children: [_jsx("path", { d: "M5 7h14l-1.4 13H6.4L5 7Z" }), _jsx("path", { d: "M9 7V6a3 3 0 0 1 6 0v1" })] }) }), _jsxs("div", { children: [_jsx("h1", { className: "text-xl font-semibold tracking-tight md:text-2xl", children: "Product Management" }), _jsx("p", { className: "mt-0.5 text-[13px] text-gray-500", children: "Manage inventory and product catalog" })] })] }), _jsxs("div", { className: "flex flex-wrap items-center gap-2", children: [_jsx(Button, { variant: "secondary", onClick: () => exportCsv(visible), disabled: visible.length === 0, children: "\u2193 Export" }), _jsx(Button, { variant: "secondary", title: "More actions", onClick: () => setMsg(''), children: "\u00B7\u00B7\u00B7 More" }), _jsx(Button, { variant: "secondary", onClick: () => openAdjust(null), children: "Adjust stock" }), _jsx(Button, { onClick: () => navigate('/products/new'), children: "+ Add" })] })] }), msg && (_jsx("p", { className: "mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700", children: msg })), _jsxs("div", { className: "mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4", children: [_jsxs("button", { type: "button", onClick: clearFilters, className: `flex items-center gap-3 rounded-2xl border px-4 py-3 text-left transition ${statusFilter === 'all' && !popularOnly && !search && categoryFilter === 'all'
                             ? 'border-red-200 bg-red-50'
                             : 'border-gray-200 bg-white hover:bg-gray-50'}`, children: [_jsx("span", { className: "text-red-500", "aria-hidden": "true", children: _jsxs("svg", { width: "18", height: "18", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", children: [_jsx("path", { d: "M5 7h14l-1.4 13H6.4L5 7Z" }), _jsx("path", { d: "M9 7V6a3 3 0 0 1 6 0v1" })] }) }), _jsxs("span", { className: "text-sm text-gray-600", children: [_jsx("strong", { className: "mr-1 text-base font-semibold text-gray-900", children: stats.total }), "Products"] })] }), _jsxs("button", { type: "button", onClick: () => setStatusFilter(statusFilter === 'low' ? 'all' : 'low'), className: `flex items-center gap-3 rounded-2xl border px-4 py-3 text-left transition ${statusFilter === 'low'
                             ? 'border-gray-300 bg-gray-100'
@@ -337,15 +427,39 @@ export default function ProductsPage() {
                                                                                     : 'bg-emerald-500'}` }))] }), _jsxs("div", { className: "min-w-0", children: [_jsx("p", { className: "truncate font-medium text-gray-900", children: p.name }), _jsxs("p", { className: "truncate text-xs text-gray-400", children: [formatDate(p.created_at) || p.id.slice(0, 8), p.vat_exempt && ' · VAT-exempt'] })] })] }) }), _jsx("td", { className: "px-3 py-3", children: _jsx(Badge, { tone: "brand", children: r.categoryName }) }), _jsx("td", { className: "px-3 py-3 text-right font-medium", children: formatPHP(p.retail_price) }), _jsx("td", { className: "px-3 py-3 text-right", children: r.stock == null ? (_jsx("span", { className: "text-gray-400", children: "\u2014" })) : r.status === 'low' || r.status === 'out' ? (_jsxs("span", { className: "inline-flex items-center gap-1 text-amber-700", children: [_jsx("span", { "aria-hidden": "true", children: "\u26A0" }), r.stock] })) : (_jsx("span", { children: r.stock })) }), _jsx("td", { className: "px-3 py-3", children: _jsx(StatusBadge, { status: r.status }) }), _jsxs("td", { className: "relative px-3 py-3 text-right last:pr-0", children: [_jsx("button", { type: "button", "aria-label": `Actions for ${p.name}`, onClick: (e) => {
                                                                     e.stopPropagation();
                                                                     setMenuFor(menuFor === p.id ? null : p.id);
-                                                                }, className: "rounded-full border border-gray-200 bg-white px-2.5 py-1 text-gray-500 hover:bg-gray-100", children: "\u00B7\u00B7\u00B7" }), menuFor === p.id && (_jsxs("div", { onClick: (e) => e.stopPropagation(), className: "absolute right-0 top-full z-20 mt-1 w-40 rounded-xl border border-gray-200 bg-white py-1 text-left shadow-lg", children: [_jsx("button", { type: "button", className: "block w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50", onClick: () => openQuickEdit(p), children: "Quick edit" }), _jsx("button", { type: "button", className: "block w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50", onClick: () => openEditPage(p), children: "Full edit" }), _jsx("button", { type: "button", className: "block w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50", onClick: () => openUnits(p), children: "Sell units" }), _jsx("button", { type: "button", className: "block w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50", onClick: () => deactivate(p), children: "Deactivate" })] }))] })] }, p.id));
+                                                                }, className: "rounded-full border border-gray-200 bg-white px-2.5 py-1 text-gray-500 hover:bg-gray-100", children: "\u00B7\u00B7\u00B7" }), menuFor === p.id && (_jsxs("div", { onClick: (e) => e.stopPropagation(), className: "absolute right-0 top-full z-20 mt-1 w-40 rounded-xl border border-gray-200 bg-white py-1 text-left shadow-lg", children: [_jsx("button", { type: "button", className: "block w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50", onClick: () => openQuickEdit(p), children: "Quick edit" }), _jsx("button", { type: "button", className: "block w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50", onClick: () => openEditPage(p), children: "Full edit" }), _jsx("button", { type: "button", className: "block w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50", onClick: () => openUnits(p), children: "Sell units" }), _jsx("button", { type: "button", className: "block w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50", onClick: () => openAdjust(p), children: "Adjust stock" }), _jsx("button", { type: "button", className: "block w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50", onClick: () => deactivate(p), children: "Deactivate" })] }))] })] }, p.id));
                                         }) })] }) }), _jsx(ListFooter, { count: visible.length, noun: "product" })] })) : (_jsx("div", { className: "grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4", children: visible.map((r) => {
                         const p = r.product;
-                        return (_jsxs("article", { className: "rounded-2xl border border-gray-200 bg-white p-4 shadow-sm", children: [_jsx("div", { className: "mb-3 flex h-28 items-center justify-center overflow-hidden rounded-xl bg-gray-900 text-gray-500", children: p.image_path ? (_jsx("img", { src: p.image_path, alt: "", className: "h-full w-full object-cover", onError: (e) => {
+                        return (_jsxs("article", { className: "rounded-2xl border border-gray-200 bg-white p-4 shadow-sm", children: [_jsx("div", { className: "mb-3 flex h-28 items-center justify-center overflow-hidden rounded-xl bg-gray-100 text-gray-500", children: p.image_path ? (_jsx("img", { src: p.image_path, alt: "", className: "h-full w-full object-cover", onError: (e) => {
                                             e.currentTarget.style.display = 'none';
                                         } })) : (_jsxs("svg", { width: "32", height: "32", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.5", children: [_jsx("rect", { x: "3", y: "5", width: "18", height: "14", rx: "2" }), _jsx("circle", { cx: "9", cy: "11", r: "2" }), _jsx("path", { d: "m21 16-5-5-4 4-2-2-5 5" })] })) }), _jsxs("div", { className: "flex items-start justify-between gap-2", children: [_jsxs("div", { className: "min-w-0", children: [_jsx("p", { className: "truncate font-medium text-gray-900", children: p.name }), _jsx("p", { className: "text-xs text-gray-400", children: formatDate(p.created_at) })] }), _jsx(StatusBadge, { status: r.status })] }), _jsxs("div", { className: "mt-2 flex items-center justify-between", children: [_jsx(Badge, { tone: "brand", children: r.categoryName }), _jsx("span", { className: "font-semibold", children: formatPHP(p.retail_price) })] }), _jsxs("div", { className: "mt-3 flex items-center justify-between border-t border-gray-100 pt-3", children: [_jsxs("span", { className: "text-sm text-gray-600", children: ["Stock: ", _jsx("strong", { children: r.stock == null ? '—' : r.stock })] }), _jsxs("div", { className: "flex gap-1", children: [_jsx(Button, { size: "compact", variant: "secondary", onClick: () => openEditPage(p), children: "Edit" }), _jsx(Button, { size: "compact", variant: "ghost", onClick: () => deactivate(p), children: "Off" })] })] })] }, p.id));
                     }) })) }), selected.size > 0 && (_jsxs("div", { className: "fixed bottom-20 left-1/2 z-40 flex -translate-x-1/2 items-center gap-3 rounded-full border border-gray-200 bg-white px-4 py-2 shadow-lg md:bottom-6", children: [_jsxs("span", { className: "text-sm text-gray-600", children: [selected.size, " selected"] }), _jsx(Button, { size: "compact", variant: "ghost", onClick: () => setSelected(new Set()), children: "Clear" }), _jsx(Button, { size: "compact", variant: "secondary", onClick: () => exportCsv(rows.filter((r) => selected.has(r.product.id))), children: "Export selected" })] })), unitsFor && (_jsx(Modal, { title: `Units — ${unitsFor.name}`, onClose: () => setUnitsFor(null), children: _jsxs("div", { className: "grid gap-3", children: [_jsx("p", { className: "text-[13px] text-gray-500", children: "Base unit is \u201Cpc\u201D. Add alternates like \u201Ccase of 12\u201D: 1 case deducts 12 from stock. Leave price blank for linear pricing (base \u00D7 12)." }), units.length === 0 ? (_jsx("p", { className: "text-sm text-gray-400", children: "No extra units yet." })) : (_jsx("div", { className: "-mx-4 overflow-x-auto px-4", children: _jsxs("table", { className: "w-full text-left text-sm", children: [_jsx("thead", { children: _jsxs("tr", { className: "border-b border-gray-200 text-xs text-gray-500", children: [_jsx("th", { className: "px-3 py-2 font-medium first:pl-0", children: "Unit" }), _jsx("th", { className: "px-3 py-2 text-right font-medium", children: "Factor" }), _jsx("th", { className: "px-3 py-2 text-right font-medium", children: "Price" }), _jsx("th", { className: "px-3 py-2 last:pr-0" })] }) }), _jsx("tbody", { className: "divide-y divide-gray-100", children: units.map((u) => (_jsxs("tr", { children: [_jsx("td", { className: "px-3 py-2 first:pl-0", children: u.unit_name }), _jsxs("td", { className: "px-3 py-2 text-right", children: ["\u00D7", u.conversion_factor] }), _jsx("td", { className: "px-3 py-2 text-right", children: u.selling_price != null
                                                         ? formatPHP(u.selling_price)
-                                                        : 'linear' }), _jsx("td", { className: "px-3 py-2 text-right last:pr-0", children: _jsx(Button, { size: "compact", variant: "ghost", onClick: () => delUnit(u), children: "Remove" }) })] }, u.id))) })] }) })), _jsxs("div", { className: "grid grid-cols-[1fr_72px_88px_auto] items-end gap-2", children: [_jsx(Field, { label: "Unit", children: _jsx(TextInput, { placeholder: "case", value: unitName, onChange: (e) => setUnitName(e.target.value) }) }), _jsx(Field, { label: "Factor", children: _jsx(TextInput, { placeholder: "12", value: unitFactor, onChange: (e) => setUnitFactor(e.target.value), inputMode: "decimal" }) }), _jsx(Field, { label: "Price \u20B1", children: _jsx(TextInput, { placeholder: "optional", value: unitPrice, onChange: (e) => setUnitPrice(e.target.value), inputMode: "decimal" }) }), _jsx(Button, { variant: "secondary", disabled: !unitName.trim() || Number(unitFactor) <= 0, onClick: addUnit, children: "Add" })] }), msg && _jsx("p", { className: "text-[13px] text-red-600", children: msg })] }) })), editing && (_jsx(Modal, { title: `Quick edit — ${editing.name}`, onClose: () => setEditing(null), children: _jsxs("div", { className: "grid gap-3", children: [_jsx(Field, { label: "Retail price (\u20B1)", children: _jsx(TextInput, { value: editPrice, onChange: (e) => setEditPrice(e.target.value), inputMode: "decimal" }) }), _jsx(Field, { label: "Cost price (\u20B1)", hint: "Used for profit reports.", children: _jsx(TextInput, { value: editCost, onChange: (e) => setEditCost(e.target.value), inputMode: "decimal" }) }), _jsxs("label", { className: "flex items-center gap-2 text-[13px] text-gray-600", children: [_jsx("input", { type: "checkbox", checked: editExempt, onChange: (e) => setEditExempt(e.target.checked) }), "VAT exempt (excluded from the VAT base)"] }), _jsxs("div", { className: "flex items-center justify-between gap-2", children: [_jsx(Button, { variant: "secondary", onClick: () => {
+                                                        : 'linear' }), _jsx("td", { className: "px-3 py-2 text-right last:pr-0", children: _jsx(Button, { size: "compact", variant: "ghost", onClick: () => delUnit(u), children: "Remove" }) })] }, u.id))) })] }) })), _jsxs("div", { className: "grid grid-cols-[1fr_72px_88px_auto] items-end gap-2", children: [_jsx(Field, { label: "Unit", children: _jsx(TextInput, { placeholder: "case", value: unitName, onChange: (e) => setUnitName(e.target.value) }) }), _jsx(Field, { label: "Factor", children: _jsx(TextInput, { placeholder: "12", value: unitFactor, onChange: (e) => setUnitFactor(e.target.value), inputMode: "decimal" }) }), _jsx(Field, { label: "Price \u20B1", children: _jsx(TextInput, { placeholder: "optional", value: unitPrice, onChange: (e) => setUnitPrice(e.target.value), inputMode: "decimal" }) }), _jsx(Button, { variant: "secondary", disabled: !unitName.trim() || Number(unitFactor) <= 0, onClick: addUnit, children: "Add" })] }), msg && _jsx("p", { className: "text-[13px] text-red-600", children: msg })] }) })), adjustOpen && (_jsx(Modal, { title: "Adjust stock", onClose: closeAdjust, wide: true, panelClassName: "bg-[#FAF7F2]", header: _jsxs("div", { className: "flex min-w-0 items-center gap-3", children: [_jsx("span", { "aria-hidden": "true", className: "inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#FCE8DE] text-[#E8794A]", children: _jsxs("svg", { width: "22", height: "22", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round", children: [_jsx("path", { d: "M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" }), _jsx("path", { d: "m3.3 7 8.7 5 8.7-5" }), _jsx("path", { d: "M12 22V12" })] }) }), _jsxs("div", { className: "min-w-0", children: [_jsx("p", { className: "text-base font-bold tracking-tight text-[#172033]", children: "Adjust stock" }), _jsx("p", { className: "truncate text-[13px] text-[#8b857c]", children: adjusting?.name ?? 'Select product' })] })] }), footer: _jsxs("div", { className: "flex flex-wrap items-center justify-between gap-3", children: [_jsx("p", { className: `text-sm ${adjHint || msg ? 'text-[#e8794a]' : 'text-transparent'}`, "aria-live": "polite", children: msg || adjHint || '·' }), _jsxs("div", { className: "flex items-center gap-2", children: [_jsx("button", { type: "button", onClick: closeAdjust, className: "h-12 rounded-full border border-[#e5e0d8] bg-white px-6 text-sm font-semibold text-[#172033] hover:bg-[#f3efe8]", children: "Cancel" }), _jsxs("button", { type: "button", disabled: adjustM.isPending || !adjusting || !adjReason || adjQty <= 0, onClick: submitAdjust, className: "inline-flex h-12 items-center gap-2 rounded-full bg-[#f08a8a] px-6 text-sm font-semibold text-white shadow-sm hover:bg-[#e87a7a] disabled:cursor-not-allowed disabled:opacity-45", children: [_jsx("svg", { width: "16", height: "16", viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: _jsx("path", { d: "M3 8.5 6.5 12 13 4" }) }), adjustM.isPending
+                                            ? 'Saving…'
+                                            : adjDir === 'in'
+                                                ? 'Add stock'
+                                                : 'Remove stock'] })] })] }), children: _jsx("div", { className: "grid gap-4", children: !items.length ? (_jsx("p", { className: "text-sm text-[#8b857c]", children: "No products yet." })) : (_jsxs(_Fragment, { children: [!adjPreset && (_jsxs("div", { className: "rounded-3xl bg-white p-5 shadow-[0_1px_2px_rgba(23,32,51,0.04)]", children: [_jsx("label", { htmlFor: "adj-product", className: "mb-2 block text-xs font-bold uppercase tracking-[0.08em] text-[#8b857c]", children: "Product" }), _jsx("select", { id: "adj-product", className: "h-12 w-full rounded-2xl border border-[#e5e0d8] bg-white px-3 text-sm font-medium text-[#172033] focus:border-[#172033] focus:outline-none focus:ring-1 focus:ring-[#172033]", value: adjusting?.id ?? '', onChange: (e) => {
+                                            const next = items.find((p) => p.id === e.target.value);
+                                            if (next)
+                                                setAdjusting(next);
+                                        }, children: items.map((p) => (_jsx("option", { value: p.id, children: p.name }, p.id))) })] })), _jsx("div", { className: "rounded-3xl border border-gray-200 bg-gray-50 px-5 py-4 text-gray-900", children: _jsxs("div", { className: "flex items-end justify-between gap-3", children: [_jsx("span", { className: "text-sm font-medium text-gray-500", children: "In stock now" }), _jsxs("span", { className: "flex items-baseline gap-1.5", children: [_jsx("span", { className: "text-3xl font-bold leading-none tracking-tight", children: adjStock ?? 0 }), _jsx("span", { className: "text-sm text-gray-500", children: adjUnit })] })] }) }), _jsx("div", { className: "rounded-3xl bg-white p-3 shadow-[0_1px_2px_rgba(23,32,51,0.04)]", children: _jsxs("div", { role: "group", "aria-label": "Stock direction", className: "grid grid-cols-2 gap-2", children: [_jsxs("button", { type: "button", "aria-pressed": adjDir === 'in', onClick: () => pickDir('in'), className: `flex h-14 items-center justify-center gap-2 rounded-full text-[15px] font-semibold transition ${adjDir === 'in'
+                                                ? 'bg-primary text-white shadow-sm'
+                                                : 'border border-[#e5e0d8] bg-white text-[#172033] hover:bg-[#f7f3ec]'}`, children: [_jsxs("svg", { width: "18", height: "18", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: [_jsx("path", { d: "M16 7h6v6" }), _jsx("path", { d: "m22 7-8.5 8.5-5-5L2 17" })] }), "Stock in"] }), _jsxs("button", { type: "button", "aria-pressed": adjDir === 'out', onClick: () => pickDir('out'), className: `flex h-14 items-center justify-center gap-2 rounded-full text-[15px] font-semibold transition ${adjDir === 'out'
+                                                ? 'bg-primary text-white shadow-sm'
+                                                : 'border border-[#e5e0d8] bg-white text-[#172033] hover:bg-[#f7f3ec]'}`, children: [_jsxs("svg", { width: "18", height: "18", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: [_jsx("path", { d: "M16 17h6v-6" }), _jsx("path", { d: "m22 17-8.5-8.5-5 5L2 7" })] }), "Stock out"] })] }) }), _jsxs("div", { className: "rounded-3xl bg-white p-5 shadow-[0_1px_2px_rgba(23,32,51,0.04)]", children: [_jsx("p", { className: "mb-3 text-xs font-bold uppercase tracking-[0.08em] text-[#8b857c]", children: "Why" }), _jsx("div", { className: "flex flex-wrap gap-2", children: adjReasons.map((r) => {
+                                            const on = adjReason === r.value;
+                                            return (_jsx("button", { type: "button", "aria-pressed": on, onClick: () => {
+                                                    setAdjReason(r.value);
+                                                    setAdjTouched(true);
+                                                    setMsg('');
+                                                }, className: `rounded-full border px-4 py-2.5 text-sm font-medium transition ${on
+                                                    ? 'border-primary bg-primary text-white'
+                                                    : 'border-[#e5e0d8] bg-white text-[#172033] hover:border-[#cfc8bd] hover:bg-[#f7f3ec]'}`, children: r.label }, r.value));
+                                        }) })] }), _jsxs("div", { className: "rounded-3xl bg-white p-5 shadow-[0_1px_2px_rgba(23,32,51,0.04)]", children: [_jsx("p", { className: "mb-3 text-xs font-bold uppercase tracking-[0.08em] text-[#8b857c]", children: "How many pieces" }), _jsxs("div", { className: "flex items-center gap-3", children: [_jsx("button", { type: "button", "aria-label": "Decrease quantity", onClick: () => setAdjQty((q) => Math.max(0, q - 1)), className: "flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-[#e5e0d8] bg-white text-2xl leading-none text-[#172033] hover:bg-[#f7f3ec]", children: "\u2212" }), _jsx("input", { "aria-label": "Quantity", inputMode: "numeric", className: "h-14 min-w-0 flex-1 rounded-2xl border border-[#e5e0d8] bg-white text-center text-xl font-bold text-[#172033] focus:border-[#172033] focus:outline-none focus:ring-1 focus:ring-[#172033]", value: adjQty === 0 ? '0' : String(adjQty), onChange: (e) => {
+                                                    const n = parseInt(e.target.value.replace(/\D/g, ''), 10);
+                                                    setAdjQty(Number.isFinite(n) ? Math.max(0, n) : 0);
+                                                } }), _jsx("button", { type: "button", "aria-label": "Increase quantity", onClick: () => setAdjQty((q) => q + 1), className: "flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-[#e5e0d8] bg-white text-2xl leading-none text-[#172033] hover:bg-[#f7f3ec]", children: "+" })] }), _jsx("p", { className: "mt-2 text-[13px] text-[#8b857c]", children: "Whole pieces only." }), _jsxs("div", { className: "mt-3 flex items-center gap-2 rounded-2xl bg-[#f0ebe3] px-4 py-3.5 text-sm text-[#5c574f]", children: [_jsx("span", { className: "font-medium", children: adjStock ?? 0 }), _jsx("span", { "aria-hidden": "true", children: "\u2192" }), _jsx("span", { className: "text-xl font-bold text-[#172033]", children: adjNext }), _jsx("span", { className: "text-[#8b857c]", children: adjUnit })] })] })] })) }) })), editing && (_jsx(Modal, { title: `Quick edit — ${editing.name}`, onClose: () => setEditing(null), children: _jsxs("div", { className: "grid gap-3", children: [_jsx(Field, { label: "Retail price (\u20B1)", children: _jsx(TextInput, { value: editPrice, onChange: (e) => setEditPrice(e.target.value), inputMode: "decimal" }) }), _jsx(Field, { label: "Cost price (\u20B1)", hint: "Used for profit reports.", children: _jsx(TextInput, { value: editCost, onChange: (e) => setEditCost(e.target.value), inputMode: "decimal" }) }), _jsxs("label", { className: "flex items-center gap-2 text-[13px] text-gray-600", children: [_jsx("input", { type: "checkbox", checked: editExempt, onChange: (e) => setEditExempt(e.target.checked) }), "VAT exempt (excluded from the VAT base)"] }), _jsxs("div", { className: "flex items-center justify-between gap-2", children: [_jsx(Button, { variant: "secondary", onClick: () => {
                                         const id = editing.id;
                                         setEditing(null);
                                         navigate(`/products/${id}/edit`);

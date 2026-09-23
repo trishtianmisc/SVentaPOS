@@ -24,6 +24,8 @@ class _T:
         self.n = name
         self._single = False
         self._eq: list[tuple] = []
+        self._gte: tuple | None = None
+        self._lt: tuple | None = None
 
     def table(self, *a, **k):
         return _T(self.s, a[0])
@@ -35,10 +37,12 @@ class _T:
         self._eq.append((col, val))
         return self
 
-    def gte(self, *a, **k):
+    def gte(self, col, val):
+        self._gte = (col, val)
         return self
 
-    def lt(self, *a, **k):
+    def lt(self, col, val):
+        self._lt = (col, val)
         return self
 
     def in_(self, *a, **k):
@@ -85,6 +89,17 @@ class _T:
             return _R(self.s["sales"])
         if self.n == "sale_payments":
             return _R(self.s["payments"])
+        if self.n == "expenses":
+            rows = list(self.s.get("expenses", []))
+            for col, val in self._eq:
+                rows = [r for r in rows if str(r.get(col)) == str(val)]
+            if self._gte:
+                col, val = self._gte
+                rows = [r for r in rows if str(r.get(col) or "") >= str(val)]
+            if self._lt:
+                col, val = self._lt
+                rows = [r for r in rows if str(r.get(col) or "") < str(val)]
+            return _R(rows)
         return _R([])
 
 
@@ -193,3 +208,32 @@ def test_z_math_cash_and_change(monkeypatch):
     assert z["cash_tendered"] == 120
     assert z["change_given"] == 20
     assert z["expected_cash"] == 600  # 500 float + 120 cash - 20 change
+    assert z["cash_expenses"] == 0
+    assert z["expenses_total"] == 0
+
+
+def test_z_math_cash_expenses_reduce_drawer(monkeypatch):
+    state = {
+        "shifts": [],
+        "sales": [],
+        "payments": [],
+        "expenses": [
+            {"organization_id": ORG, "store_id": STORE, "amount": 50,
+             "payment_method": "cash",
+             "created_at": "2026-09-22T10:00:00+00:00"},
+            {"organization_id": ORG, "store_id": STORE, "amount": 30,
+             "payment_method": "gcash",
+             "created_at": "2026-09-22T11:00:00+00:00"},
+            {"organization_id": ORG, "store_id": STORE, "amount": 99,
+             "payment_method": "cash",
+             "created_at": "2026-09-24T10:00:00+00:00"},
+        ],
+        "audit": [],
+    }
+    monkeypatch.setattr(shift_service, "_sb", lambda: _T(state, "shifts"))
+    sb = _T(state, "x")
+    z = shift_service._z_report(sb, ORG, STORE, "2026-09-22T00:00:00+00:00",
+                                "2026-09-23T00:00:00+00:00", 500)
+    assert z["cash_expenses"] == 50
+    assert z["expenses_total"] == 80
+    assert z["expected_cash"] == 450  # 500 - 50 cash paid out

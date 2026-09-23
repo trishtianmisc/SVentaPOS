@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # Billing provider webhook verification ("manual" disables provider checks).
     billing_provider: str = "manual"
     billing_webhook_secret: str = ""
+    # Business calendar for date filters (Today/Yesterday, report by_day).
+    # sales.created_at is UTC; UI sends local calendar days (Asia/Manila = +8).
+    business_tz_offset_hours: int = 8
 
     @property
     def platform_admins(self) -> set[str]:

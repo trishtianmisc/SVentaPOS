@@ -4,17 +4,17 @@ import { create } from 'zustand';
 export function Button({ variant = 'primary', size = 'normal', className = '', ...props }) {
     const heights = { compact: 'h-9', normal: 'h-10', large: 'h-12' };
     const styles = {
-        primary: 'bg-primary text-white hover:bg-primary-hover',
-        secondary: 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-100',
-        danger: 'bg-red-700 text-white hover:bg-red-800',
+        primary: 'bg-primary text-white hover:bg-primary-hover dark:text-[#1a1010]',
+        secondary: 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 dark:border-[#2a2a2e] dark:bg-[#141416] dark:text-[#e8e4dc] dark:hover:bg-[#1c1c20]',
+        danger: 'bg-red-700 text-white hover:bg-red-800 dark:bg-red-800',
         ghost: 'text-primary hover:bg-primary-soft',
     };
     return (_jsx("button", { className: `rounded-lg px-4 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40 ${heights[size]} ${styles[variant]} ${className}`, ...props }));
 }
 export function Field({ label, hint, error, children }) {
-    return (_jsxs("label", { className: "block", children: [_jsx("span", { className: "mb-1.5 block text-sm font-medium text-gray-700", children: label }), children, hint && !error && _jsx("span", { className: "mt-1.5 block text-xs text-gray-400", children: hint }), error && _jsx("span", { className: "mt-1.5 block text-xs text-red-600", children: error })] }));
+    return (_jsxs("label", { className: "block", children: [_jsx("span", { className: "mb-1.5 block text-sm font-medium text-gray-700 dark:text-[#c9c3b8]", children: label }), children, hint && !error && (_jsx("span", { className: "mt-1.5 block text-xs text-gray-400 dark:text-[#6f6a62]", children: hint })), error && (_jsx("span", { className: "mt-1.5 block text-xs text-red-600 dark:text-[#f0a090]", children: error }))] }));
 }
-const inputCls = 'h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary';
+const inputCls = 'h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary dark:border-[#2a2a2e] dark:bg-[#121214] dark:text-[#f3efe8] dark:placeholder:text-[#5c5852]';
 export function TextInput(props) {
     return _jsx("input", { ...props, className: `${inputCls} ${props.className ?? ''}` });
 }
@@ -23,43 +23,43 @@ export function PasswordInput({ className = '', ...props }) {
     return (_jsxs("span", { className: "relative block", children: [_jsx("input", { ...props, type: show ? 'text' : 'password', className: `${inputCls} pr-10 ${className}` }), _jsx("button", { type: "button", "aria-label": show ? 'Hide password' : 'Show password', onClick: (e) => {
                     e.preventDefault();
                     setShow((v) => !v);
-                }, className: "absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-1 focus:ring-primary", children: show ? (_jsxs("svg", { width: "16", height: "16", viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", "aria-hidden": "true", children: [_jsx("path", { d: "M2 2l12 12" }), _jsx("path", { d: "M6.4 6.4a2 2 0 002.8 2.8" }), _jsx("path", { d: "M4.1 4.1C2.7 5 1.7 6.4 1 8c1.4 2.7 4 4.5 7 4.5 1.1 0 2.2-.2 3.2-.7" }), _jsx("path", { d: "M6.6 3.7c.5-.1 1-.2 1.4-.2 3 0 5.6 1.8 7 4.5-.4.8-1 1.6-1.7 2.3" })] })) : (_jsxs("svg", { width: "16", height: "16", viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", "aria-hidden": "true", children: [_jsx("path", { d: "M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z" }), _jsx("circle", { cx: "8", cy: "8", r: "2" })] })) })] }));
+                }, className: "absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-1 focus:ring-primary dark:text-[#6f6a62] dark:hover:text-[#c9c3b8]", children: show ? (_jsxs("svg", { width: "16", height: "16", viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", strokeLinecap: "round", "aria-hidden": "true", children: [_jsx("path", { d: "M2 2l12 12" }), _jsx("path", { d: "M6.4 6.4a2 2 0 002.8 2.8" }), _jsx("path", { d: "M4.1 4.1C2.7 5 1.7 6.4 1 8c1.4 2.7 4 4.5 7 4.5 1.1 0 2.2-.2 3.2-.7" }), _jsx("path", { d: "M6.6 3.7c.5-.1 1-.2 1.4-.2 3 0 5.6 1.8 7 4.5-.4.8-1 1.6-1.7 2.3" })] })) : (_jsxs("svg", { width: "16", height: "16", viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "1.5", "aria-hidden": "true", children: [_jsx("path", { d: "M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z" }), _jsx("circle", { cx: "8", cy: "8", r: "2" })] })) })] }));
 }
 export function Select(props) {
     return _jsx("select", { ...props, className: `${inputCls} ${props.className ?? ''}` });
 }
 export function Badge({ tone = 'gray', children }) {
     const tones = {
-        amber: 'bg-amber-100 text-amber-800',
-        red: 'bg-red-100 text-red-800',
-        green: 'bg-green-100 text-green-800',
-        gray: 'bg-gray-100 text-gray-600',
+        amber: 'bg-amber-100 text-amber-800 dark:bg-[#2a2210] dark:text-[#e8c86a]',
+        red: 'bg-red-100 text-red-800 dark:bg-[#2a1a1c] dark:text-[#f0a090]',
+        green: 'bg-green-100 text-green-800 dark:bg-[#123528] dark:text-[#3dd68c]',
+        gray: 'bg-gray-100 text-gray-600 dark:bg-[#1a1a1e] dark:text-[#9b958c]',
         brand: 'bg-primary-soft text-primary-ink',
     };
     return (_jsx("span", { className: `inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${tones[tone]}`, children: children }));
 }
 export function Section({ title, action, children, }) {
-    return (_jsxs("section", { className: "rounded-xl border border-gray-200 bg-white p-4", children: [(title || action) && (_jsxs("div", { className: "mb-3 flex items-center justify-between", children: [title && _jsx("h2", { className: "text-base font-semibold", children: title }), action] })), children] }));
+    return (_jsxs("section", { className: "rounded-xl border border-gray-200 bg-white p-4 dark:border-[#1e1e22] dark:bg-[#121214]", children: [(title || action) && (_jsxs("div", { className: "mb-3 flex items-center justify-between", children: [title && (_jsx("h2", { className: "text-base font-semibold dark:text-white", children: title })), action] })), children] }));
 }
 export function PageHeader({ title, sub, actions, }) {
-    return (_jsxs("div", { className: "mb-4 flex flex-wrap items-center justify-between gap-2", children: [_jsxs("div", { children: [_jsx("h1", { className: "text-xl font-semibold md:text-2xl", children: title }), sub && _jsx("p", { className: "mt-1 text-[13px] text-gray-500", children: sub })] }), actions] }));
+    return (_jsxs("div", { className: "mb-4 flex flex-wrap items-center justify-between gap-2", children: [_jsxs("div", { children: [_jsx("h1", { className: "text-xl font-semibold md:text-2xl dark:text-white", children: title }), sub && (_jsx("p", { className: "mt-1 text-[13px] text-gray-500 dark:text-[#9b958c]", children: sub }))] }), actions] }));
 }
 export function Table({ head, children }) {
-    return (_jsx("div", { className: "-mx-4 overflow-x-auto px-4", children: _jsxs("table", { className: "w-full text-left text-sm", children: [_jsx("thead", { children: _jsx("tr", { className: "border-b border-gray-200 text-xs text-gray-500", children: head.map((h, i) => (_jsx("th", { scope: "col", className: `px-3 py-2 font-medium first:pl-0 last:pr-0 ${i > 0 ? 'text-right' : ''}`, children: h }, h))) }) }), _jsx("tbody", { className: "divide-y divide-gray-100", children: children })] }) }));
+    return (_jsx("div", { className: "-mx-4 overflow-x-auto px-4", children: _jsxs("table", { className: "w-full text-left text-sm", children: [_jsx("thead", { children: _jsx("tr", { className: "border-b border-gray-200 text-xs text-gray-500 dark:border-[#1e1e22] dark:text-[#6f6a62]", children: head.map((h, i) => (_jsx("th", { scope: "col", className: `px-3 py-2 font-medium first:pl-0 last:pr-0 ${i > 0 ? 'text-right' : ''}`, children: h }, h))) }) }), _jsx("tbody", { className: "divide-y divide-gray-100 dark:divide-[#1a1a1e]", children: children })] }) }));
 }
 export function Spinner({ label = 'Loading…' }) {
-    return (_jsxs("p", { role: "status", "aria-live": "polite", className: "py-3 text-sm text-gray-500", children: [_jsx("span", { "aria-hidden": "true", className: "mr-2 inline-block h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-primary align-[-2px]" }), label] }));
+    return (_jsxs("p", { role: "status", "aria-live": "polite", className: "py-3 text-sm text-gray-500 dark:text-[#9b958c]", children: [_jsx("span", { "aria-hidden": "true", className: "mr-2 inline-block h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-primary align-[-2px] dark:border-[#2a2a2e]" }), label] }));
 }
 export function EmptyState({ title, hint }) {
-    return (_jsxs("div", { className: "py-6 text-center", children: [_jsx("p", { className: "text-sm font-medium text-gray-700", children: title }), hint && _jsx("p", { className: "mt-1 text-[13px] text-gray-400", children: hint })] }));
+    return (_jsxs("div", { className: "py-6 text-center", children: [_jsx("p", { className: "text-sm font-medium text-gray-700 dark:text-[#c9c3b8]", children: title }), hint && (_jsx("p", { className: "mt-1 text-[13px] text-gray-400 dark:text-[#6f6a62]", children: hint }))] }));
 }
 export function ListFooter({ count, noun }) {
-    return (_jsxs("p", { className: "mt-3 text-xs text-gray-400", children: ["Showing ", count, " ", noun, count === 1 ? '' : 's'] }));
+    return (_jsxs("p", { className: "mt-3 text-xs text-gray-400 dark:text-[#6f6a62]", children: ["Showing ", count, " ", noun, count === 1 ? '' : 's'] }));
 }
 export function SearchInput({ value, onChange, placeholder, label, }) {
-    return (_jsxs("div", { className: "relative flex-1", children: [_jsx("label", { htmlFor: `search-${label}`, className: "sr-only", children: label }), _jsx("span", { "aria-hidden": "true", className: "pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400", children: _jsxs("svg", { width: "16", height: "16", viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "2", children: [_jsx("circle", { cx: "7", cy: "7", r: "5" }), _jsx("line", { x1: "11", y1: "11", x2: "14.5", y2: "14.5" })] }) }), _jsx("input", { id: `search-${label}`, className: "h-11 w-full rounded-lg border border-gray-300 bg-white pl-9 pr-9 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary", placeholder: placeholder, value: value, onChange: (e) => onChange(e.target.value) }), value && (_jsx("button", { type: "button", "aria-label": "Clear search", onClick: () => onChange(''), className: "absolute right-2 top-1/2 -translate-y-1/2 rounded px-2 py-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600", children: "\u00D7" }))] }));
+    return (_jsxs("div", { className: "relative flex-1", children: [_jsx("label", { htmlFor: `search-${label}`, className: "sr-only", children: label }), _jsx("span", { "aria-hidden": "true", className: "pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-[#6f6a62]", children: _jsxs("svg", { width: "16", height: "16", viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: "2", children: [_jsx("circle", { cx: "7", cy: "7", r: "5" }), _jsx("line", { x1: "11", y1: "11", x2: "14.5", y2: "14.5" })] }) }), _jsx("input", { id: `search-${label}`, className: "h-11 w-full rounded-lg border border-gray-300 bg-white pl-9 pr-9 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary dark:border-[#2a2a2e] dark:bg-[#121214] dark:text-[#f3efe8] dark:placeholder:text-[#5c5852]", placeholder: placeholder, value: value, onChange: (e) => onChange(e.target.value) }), value && (_jsx("button", { type: "button", "aria-label": "Clear search", onClick: () => onChange(''), className: "absolute right-2 top-1/2 -translate-y-1/2 rounded px-2 py-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:text-[#6f6a62] dark:hover:bg-[#1a1a1e] dark:hover:text-[#e8e4dc]", children: "\u00D7" }))] }));
 }
-export function Modal({ title, onClose, children, wide, }) {
+export function Modal({ title, onClose, children, wide, header, footer, panelClassName = '', }) {
     const ref = useRef(null);
     useEffect(() => {
         ref.current?.focus();
@@ -73,7 +73,7 @@ export function Modal({ title, onClose, children, wide, }) {
     return (_jsx("div", { className: "fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center", onMouseDown: (e) => {
             if (e.target === e.currentTarget)
                 onClose();
-        }, children: _jsxs("div", { ref: ref, role: "dialog", "aria-modal": "true", "aria-label": title, tabIndex: -1, className: `max-h-[90dvh] w-full overflow-auto bg-white p-4 focus:outline-none sm:rounded-2xl md:p-6 ${wide ? 'max-w-lg' : 'max-w-sm rounded-t-2xl'}`, children: [_jsxs("div", { className: "mb-3 flex items-center justify-between", children: [_jsx("h2", { className: "text-base font-semibold", children: title }), _jsx("button", { type: "button", "aria-label": "Close dialog", onClick: onClose, className: "rounded-lg px-2 py-1 text-xl leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-600", children: "\u00D7" })] }), children] }) }));
+        }, children: _jsxs("div", { ref: ref, role: "dialog", "aria-modal": "true", "aria-label": title, tabIndex: -1, className: `flex max-h-[90dvh] w-full flex-col overflow-hidden bg-white focus:outline-none sm:rounded-2xl dark:bg-[#121214] dark:text-[#e8e4dc] ${wide ? 'max-w-lg' : 'max-w-sm rounded-t-2xl'} ${panelClassName}`, children: [_jsxs("div", { className: "flex shrink-0 items-center justify-between gap-3 px-4 pt-4 md:px-6 md:pt-6", children: [header ?? (_jsx("h2", { className: "text-base font-semibold dark:text-white", children: title })), _jsx("button", { type: "button", "aria-label": "Close dialog", onClick: onClose, className: "shrink-0 rounded-lg px-2 py-1 text-xl leading-none text-gray-400 hover:bg-black/5 hover:text-gray-600 dark:text-[#6f6a62] dark:hover:bg-white/5 dark:hover:text-[#e8e4dc]", children: "\u00D7" })] }), _jsx("div", { className: "min-h-0 flex-1 overflow-auto px-4 pb-4 pt-3 md:px-6 md:pb-5", children: children }), footer && (_jsx("div", { className: "shrink-0 border-t border-black/5 px-4 py-4 md:px-6 dark:border-[#1e1e22]", children: footer }))] }) }));
 }
 let toastSeq = 0;
 export const useToastStore = create(() => ({ toasts: [] }));
@@ -107,9 +107,9 @@ export function ToastHost() {
     if (toasts.length === 0)
         return null;
     const tones = {
-        success: 'border-green-200 bg-green-50 text-green-800',
-        error: 'border-red-200 bg-red-50 text-red-800',
-        info: 'border-gray-200 bg-white text-gray-700',
+        success: 'border-green-200 bg-green-50 text-green-800 dark:border-[#123528] dark:bg-[#0f1a14] dark:text-[#3dd68c]',
+        error: 'border-red-200 bg-red-50 text-red-800 dark:border-[#3a2420] dark:bg-[#1a1210] dark:text-[#f0a090]',
+        info: 'border-gray-200 bg-white text-gray-700 dark:border-[#2a2a2e] dark:bg-[#121214] dark:text-[#e8e4dc]',
     };
     return (_jsx("div", { "aria-live": "polite", className: "pointer-events-none fixed inset-x-0 top-2 z-[60] mx-auto flex w-full max-w-sm flex-col gap-2 px-4", children: toasts.map((t) => (_jsx("p", { className: `rounded-xl border p-3 text-sm shadow-lg ${tones[t.kind]}`, children: t.text }, t.id))) }));
 }

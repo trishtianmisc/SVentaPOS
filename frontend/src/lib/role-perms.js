@@ -105,14 +105,17 @@ export function matrixRoleFor(apiRole) {
 }
 /** Feature key for a pathname (null = always allowed for signed-in users). */
 export function featureForPath(pathname) {
-    if (pathname === '/inventory')
-        return 'inventory';
+    // Owner Hub / Owner Console are gated by an explicit owner check in Guard.
+    if (pathname.startsWith('/owner'))
+        return null;
     if (pathname.startsWith('/products'))
         return 'inventory';
     if (pathname.startsWith('/pos'))
         return 'pos';
     if (pathname.startsWith('/sales'))
         return 'sales';
+    if (pathname.startsWith('/shifts'))
+        return 'pos';
     if (pathname.startsWith('/customers'))
         return 'customers';
     if (pathname.startsWith('/suppliers'))
@@ -132,6 +135,14 @@ export function featureForPath(pathname) {
     if (pathname.startsWith('/dashboard'))
         return 'dashboard';
     return null;
+}
+/** True when the user owns at least one store membership (Owner Hub access). */
+export function isOwnerStores(stores) {
+    return (stores ?? []).some((s) => s?.role === 'owner');
+}
+/** Post-login landing: owners get the hub; everyone else opens the store app. */
+export function landingPathFor(stores) {
+    return isOwnerStores(stores) ? '/owner-hub' : '/pos';
 }
 /**
  * One-time migrate legacy localStorage matrix to the API, then drop the key.

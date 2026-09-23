@@ -1,7 +1,8 @@
 """POS sale routes. Totals, change, receipt all computed server-side."""
+from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.api.v1.dependencies import (
     CurrentUser,
@@ -64,14 +65,29 @@ def create_sale(
 
 
 @router.get("", response_model=SuccessResponse[list[SaleDetail]],
-            dependencies=[Depends(require_feature("sales"))])
+            dependencies=[Depends(require_feature("sales"))],
+            summary="Sales list (date/status/payment/search)")
 def list_sales(
+    from_: date | None = Query(None, alias="from"),
+    to: date | None = Query(None),
+    status: str | None = Query(None, max_length=32),
+    payment_method: str | None = Query(None, max_length=32),
+    q: str | None = Query(None, max_length=120),
+    limit: int = Query(200, ge=1, le=500),
     org_id: UUID = Depends(get_current_organization),
     store: dict | None = Depends(get_current_store),
     _=Depends(get_current_user),
 ):
     o, s = _ctx(org_id, store)
-    return SuccessResponse(data=sale_service.list_sales(o, s))
+    return SuccessResponse(data=sale_service.list_sales(
+        o, s,
+        date_from=from_.isoformat() if from_ else None,
+        date_to=to.isoformat() if to else None,
+        status=status,
+        payment_method=payment_method,
+        q=q,
+        limit=limit,
+    ))
 
 
 @router.get("/{sale_id}", response_model=SuccessResponse[SaleDetail],

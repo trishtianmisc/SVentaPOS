@@ -31,7 +31,11 @@ class InventorySummary(BaseModel):
 
 class ExpenseSummary(BaseModel):
     total: float
+    count: int = 0
+    average: float = 0
     by_category: list[dict] = []
+    by_method: list[dict] = []
+    by_day: list[dict] = []
 
 
 class UtangSummary(BaseModel):

@@ -1,11 +1,11 @@
-import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { qk } from '../lib/query-keys';
 import { FEATURES, FEATURE_PERM_COUNT, MATRIX_ROLES, defaultMatrix, mergeMatrix, roleLabel, roleTone, } from '../lib/role-perms';
-import { Badge, Button, EmptyState, Field, Modal, SearchInput, Select, Spinner, TextInput, toast, } from '../components/ui';
+import { Badge, Button, EmptyState, Modal, PasswordInput, SearchInput, Select, Spinner, toast, } from '../components/ui';
 const ASSIGNABLE = ['owner', 'manager', 'cashier', 'inventory'];
 const ROLE_CARDS = [
     { role: 'owner', title: 'Owner', desc: 'Full access to all features and settings', icon: '👑' },
@@ -123,22 +123,36 @@ export default function UsersPage() {
     const [matrix, setMatrix] = useState(() => defaultMatrix());
     const [savingPerms, setSavingPerms] = useState(false);
     const [showAdd, setShowAdd] = useState(false);
+    const [branchStores, setBranchStores] = useState([]);
+    const [storeId, setStoreId] = useState('');
+    const [fullName, setFullName] = useState('');
     const [email, setEmail] = useState('');
+    const [phone, setPhone] = useState('');
     const [role, setRole] = useState('cashier');
+    const [password, setPassword] = useState('');
     const [addErr, setAddErr] = useState('');
     const [adding, setAdding] = useState(false);
     const [changingId, setChangingId] = useState(null);
+    const [invites, setInvites] = useState([]);
+    const [lastInviteUrl, setLastInviteUrl] = useState(null);
     const load = async () => {
-        const [u, stores, s, usageRes, perms] = await Promise.all([
+        const [u, stores, s, usageRes, perms, inv, branches] = await Promise.all([
             api.get('/users'),
             api.get('/stores').catch(() => ({ data: { data: [] } })),
             api.get('/subscriptions/current').catch(() => ({ data: { data: null } })),
             api.get('/subscriptions/usage').catch(() => ({ data: { data: null } })),
             api.get('/users/role-permissions').catch(() => ({ data: { data: null } })),
+            api.get('/users/invites').catch(() => ({ data: { data: [] } })),
+            api.get('/users/branch-stores').catch(() => ({ data: { data: [] } })),
         ]);
         setItems(u.data.data ?? []);
+        setInvites(inv.data.data ?? []);
         const list = stores.data.data ?? [];
         setIsOwner(list.some((s) => s.role === 'owner'));
+        const branchList = (branches.data.data ?? []);
+        setBranchStores(branchList);
+        if (!storeId && branchList.length)
+            setStoreId(branchList[0].id);
         setSub(s.data.data);
         setUsage(usageRes.data.data);
         const oid = localStorage.getItem('ventapos:orgId');
@@ -188,31 +202,61 @@ export default function UsersPage() {
         });
     };
     const resetAdd = () => {
+        setStoreId(branchStores[0]?.id ?? '');
+        setFullName('');
         setEmail('');
+        setPhone('');
         setRole('cashier');
+        setPassword('');
         setAddErr('');
     };
     const add = async () => {
         const value = email.trim();
+        const name = fullName.trim();
+        if (!storeId) {
+            setAddErr('Branch assignment is required.');
+            return;
+        }
+        if (!name) {
+            setAddErr('Full name is required.');
+            return;
+        }
         if (!value) {
             setAddErr('Email is required.');
             return;
         }
+        if (!password || password.length < 6) {
+            setAddErr('Password must be at least 6 characters.');
+            return;
+        }
         setAdding(true);
         setAddErr('');
+        setLastInviteUrl(null);
         try {
-            await api.post('/users', { email: value, role });
+            const res = await api.post('/users', {
+                store_id: storeId,
+                full_name: name,
+                email: value,
+                phone: phone.trim() || null,
+                role,
+                password,
+            });
+            const data = res.data.data;
+            const message = res.data.message ?? 'User added';
             setShowAdd(false);
             resetAdd();
-            toast('success', 'User added');
+            if (data?.status === 'invited' && data?.invite_url) {
+                setLastInviteUrl(data.invite_url);
+                toast('success', 'Invite sent — share the link if email fails');
+            }
+            else {
+                toast('success', message || 'Account created');
+            }
             await load();
         }
         catch (e) {
             const status = e.response?.status;
-            if (status === 404) {
-                setAddErr('No account with that email. Ask them to register first, then try again.');
-            }
-            else if (status === 409) {
+            if (status === 409) {
                 setAddErr(e.response?.data?.error?.message ?? 'Already a member.');
             }
             else if (status === 403) {
@@ -225,6 +269,39 @@ export default function UsersPage() {
         }
         finally {
             setAdding(false);
+        }
+    };
+    const copyInvite = async (url) => {
+        try {
+            await navigator.clipboard.writeText(url);
+            toast('success', 'Invite link copied');
+        }
+        catch {
+            toast('error', 'Could not copy — select the link manually');
+        }
+    };
+    const resendInvite = async (id) => {
+        setMsg('');
+        try {
+            const res = await api.post(`/users/invites/${id}/resend`);
+            if (res.data.data?.invite_url)
+                setLastInviteUrl(res.data.data.invite_url);
+            toast('success', 'Invite resent');
+            await load();
+        }
+        catch (e) {
+            setMsg(e.response?.data?.error?.message ?? 'Could not resend invite');
+        }
+    };
+    const revokeInvite = async (id) => {
+        setMsg('');
+        try {
+            await api.delete(`/users/invites/${id}`);
+            toast('success', 'Invite revoked');
+            await load();
+        }
+        catch (e) {
+            setMsg(e.response?.data?.error?.message ?? 'Could not revoke invite');
         }
     };
     const changeRole = async (id, next) => {
@@ -262,10 +339,18 @@ export default function UsersPage() {
     return (_jsxs("div", { className: "w-full p-4 md:p-6", children: [_jsxs("div", { className: "mb-5 flex flex-wrap items-start justify-between gap-3", children: [_jsxs("div", { className: "flex items-start gap-3", children: [_jsx("span", { "aria-hidden": true, className: "flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-100 text-xl", children: "\uD83D\uDC65" }), _jsxs("div", { children: [_jsx("h1", { className: "text-xl font-bold tracking-tight md:text-2xl", children: "User Management" }), _jsx("p", { className: "mt-0.5 text-sm text-gray-500", children: "Manage store users and access permissions" })] })] }), _jsxs(Button, { disabled: !isOwner || atLimit, title: !isOwner ? 'Only owners can add users' : atLimit ? 'Upgrade plan to add users' : undefined, onClick: () => {
                             resetAdd();
                             setShowAdd(true);
-                        }, children: [_jsx("span", { className: "mr-1.5", "aria-hidden": true, children: "\uFF0B" }), " Add User"] })] }), _jsx("div", { className: "mb-5 inline-flex rounded-full bg-slate-900 p-1", children: [
+                        }, children: [_jsx("span", { className: "mr-1.5", "aria-hidden": true, children: "\uFF0B" }), " Add Team Member"] })] }), _jsx("div", { className: "mb-5 inline-flex rounded-full bg-gray-100 p-1", children: [
                     { key: 'users', label: 'Users', icon: '👥' },
                     { key: 'roles', label: 'Roles', icon: '🛡️' },
                 ].map((t) => (_jsxs("button", { type: "button", "aria-pressed": tab === t.key, onClick: () => setTab(t.key), className: `flex items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition ${tab === t.key
-                        ? 'bg-red-500 text-white shadow'
-                        : 'text-slate-300 hover:text-white'}`, children: [_jsx("span", { "aria-hidden": true, children: t.icon }), t.label] }, t.key))) }), _jsx(PlanBanner, { planName: planName, used: usedUsers, max: maxUsers, showUpgrade: true }), msg && _jsx("p", { className: "mb-4 text-[13px] text-red-600", children: msg }), !isOwner && !loading && tab === 'users' && (_jsx("p", { className: "mb-4 rounded-xl bg-gray-100 p-4 text-sm text-gray-600", children: "Only an owner can add users or change roles. You can still see the team list." })), loading ? (_jsx(Spinner, { label: "Loading users\u2026" })) : tab === 'users' ? (_jsx(UsersTab, { items: items, isOwner: isOwner, onChangeRole: changeRole, onRemove: remove, changingId: changingId })) : (_jsx(RolesTab, { matrix: matrix, counts: roleCounts, disabled: !isOwner, onToggle: togglePerm, saving: savingPerms })), showAdd && (_jsx(Modal, { title: "Add user", onClose: () => setShowAdd(false), children: _jsxs("div", { className: "grid gap-3", children: [_jsx("p", { className: "text-[13px] text-gray-500", children: "They must already have a VentaPOS account. Enter the email they registered with \u2014 no invite email is sent." }), _jsx(Field, { label: "Email", error: addErr || undefined, children: _jsx(TextInput, { type: "email", autoComplete: "email", value: email, onChange: (e) => setEmail(e.target.value), onKeyDown: (e) => e.key === 'Enter' && add() }) }), _jsx(Field, { label: "Role", hint: "Owner: full access. Manager: run the store. Cashier: POS. Staff: basic POS.", children: _jsx(Select, { value: role, onChange: (e) => setRole(e.target.value), children: ASSIGNABLE.map((r) => (_jsx("option", { value: r, children: roleLabel(r) }, r))) }) }), _jsx(Button, { disabled: adding || !email.trim() || atLimit, onClick: add, children: adding ? 'Adding…' : 'Add user' }), atLimit && (_jsxs("p", { className: "text-xs text-amber-700", children: ["Plan user limit reached.", ' ', _jsx(Link, { to: "/billing", className: "font-semibold underline", children: "Upgrade" }), ' ', "to add more."] }))] }) }))] }));
+                        ? 'bg-primary text-white shadow'
+                        : 'text-gray-600 hover:text-gray-900'}`, children: [_jsx("span", { "aria-hidden": true, children: t.icon }), t.label] }, t.key))) }), _jsx(PlanBanner, { planName: planName, used: usedUsers, max: maxUsers, showUpgrade: true }), msg && _jsx("p", { className: "mb-4 text-[13px] text-red-600", children: msg }), lastInviteUrl && (_jsxs("div", { className: "mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3", children: [_jsx("p", { className: "text-sm font-semibold text-emerald-900", children: "Invite ready" }), _jsx("p", { className: "mb-2 text-[13px] text-emerald-800", children: "Email may be disabled in Supabase \u2014 share this link directly." }), _jsxs("div", { className: "flex flex-wrap items-center gap-2", children: [_jsx("code", { className: "min-w-0 flex-1 truncate rounded-lg bg-white px-2 py-1.5 text-xs text-gray-700", children: lastInviteUrl }), _jsx(Button, { size: "compact", variant: "secondary", onClick: () => copyInvite(lastInviteUrl), children: "Copy link" }), _jsx("button", { type: "button", className: "text-xs text-gray-500 underline", onClick: () => setLastInviteUrl(null), children: "Dismiss" })] })] })), !isOwner && !loading && tab === 'users' && (_jsx("p", { className: "mb-4 rounded-xl bg-gray-100 p-4 text-sm text-gray-600", children: "Only an owner can add users or change roles. You can still see the team list." })), loading ? (_jsx(Spinner, { label: "Loading users\u2026" })) : tab === 'users' ? (_jsxs(_Fragment, { children: [_jsx(UsersTab, { items: items, isOwner: isOwner, onChangeRole: changeRole, onRemove: remove, changingId: changingId }), isOwner && invites.length > 0 && (_jsxs("div", { className: "mt-6 grid gap-3", children: [_jsxs("div", { className: "flex items-center justify-between", children: [_jsxs("h2", { className: "text-sm font-semibold text-gray-800", children: ["Pending invites (", invites.length, ")"] }), _jsx("span", { className: "text-xs text-gray-400", children: "Links expire in 7 days" })] }), _jsx("div", { className: "overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm", children: _jsx("ul", { className: "divide-y divide-gray-50", children: invites.map((inv) => (_jsxs("li", { className: "flex flex-wrap items-center gap-3 px-4 py-3", children: [_jsxs("div", { className: "min-w-0 flex-1", children: [_jsx("p", { className: "truncate text-sm font-semibold text-gray-900", children: inv.email }), _jsxs("span", { className: "text-xs text-gray-400", children: [_jsx(Badge, { tone: roleTone(inv.role), children: roleLabel(inv.role) }), _jsx("span", { className: "ml-2", children: inv.expires_at
+                                                                    ? `expires ${relTime(inv.expires_at)}`
+                                                                    : '' })] })] }), _jsxs("div", { className: "flex shrink-0 gap-2", children: [_jsx(Button, { size: "compact", variant: "secondary", onClick: () => resendInvite(inv.id), children: "Resend" }), _jsx(Button, { size: "compact", variant: "danger", onClick: () => revokeInvite(inv.id), children: "Revoke" })] })] }, inv.id))) }) })] }))] })) : (_jsx(RolesTab, { matrix: matrix, counts: roleCounts, disabled: !isOwner, onToggle: togglePerm, saving: savingPerms })), showAdd && (_jsx(Modal, { title: "Add Team Member", onClose: () => setShowAdd(false), wide: true, panelClassName: "bg-[#FAF7F2]", header: _jsxs("div", { className: "flex min-w-0 items-center gap-3", children: [_jsx("span", { "aria-hidden": "true", className: "inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#E8F7F5] text-[#0D9488]", children: _jsx("svg", { width: "20", height: "20", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", children: _jsx("path", { d: "M12 5v14M5 12h14" }) }) }), _jsxs("div", { className: "min-w-0", children: [_jsx("p", { className: "text-base font-bold tracking-tight text-[#172033]", children: "Add Team Member" }), _jsx("p", { className: "truncate text-[13px] text-[#8b857c]", children: "Create a staff account and grant branch permissions." })] })] }), footer: _jsxs("div", { className: "flex flex-wrap items-center justify-between gap-3", children: [_jsx("p", { className: `text-sm ${addErr ? 'text-[#e8794a]' : 'text-transparent'}`, "aria-live": "polite", children: addErr || '·' }), _jsxs("div", { className: "flex items-center gap-2", children: [_jsx("button", { type: "button", onClick: () => setShowAdd(false), className: "h-12 rounded-full border border-[#e5e0d8] bg-white px-6 text-sm font-semibold text-[#172033] hover:bg-[#f3efe8]", children: "Cancel" }), _jsx("button", { type: "button", disabled: adding ||
+                                        !storeId ||
+                                        !fullName.trim() ||
+                                        !email.trim() ||
+                                        !password ||
+                                        password.length < 6 ||
+                                        atLimit, onClick: add, className: "inline-flex h-12 items-center gap-2 rounded-full bg-[#f08a8a] px-6 text-sm font-semibold text-white shadow-sm hover:bg-[#e87a7a] disabled:cursor-not-allowed disabled:opacity-45", children: adding ? 'Creating…' : 'Create Account' })] })] }), children: _jsxs("div", { className: "grid gap-4", children: [_jsx("div", { className: "rounded-3xl bg-white p-5 shadow-[0_1px_2px_rgba(23,32,51,0.04)]", children: _jsxs("div", { className: "grid gap-4", children: [_jsxs("div", { children: [_jsxs("label", { htmlFor: "tm-branch", className: "mb-1.5 block text-sm font-semibold text-[#172033]", children: ["Branch Assignment ", _jsx("span", { className: "text-[#e8794a]", children: "*" })] }), _jsxs("div", { className: "relative", children: [_jsx("span", { "aria-hidden": "true", className: "pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#E8A100]", children: _jsx("svg", { width: "16", height: "16", viewBox: "0 0 24 24", fill: "currentColor", children: _jsx("path", { d: "M5 16 3 6l5.5 4L12 4l3.5 6L21 6l-2 10H5Zm0 2h14v2H5v-2Z" }) }) }), _jsxs("select", { id: "tm-branch", value: storeId, onChange: (e) => setStoreId(e.target.value), className: "h-12 w-full appearance-none rounded-2xl border border-[#e5e0d8] bg-white pl-10 pr-10 text-sm font-medium text-[#172033] focus:border-[#172033] focus:outline-none focus:ring-1 focus:ring-[#172033]", children: [branchStores.length === 0 && (_jsx("option", { value: "", children: "No branches yet" })), branchStores.map((s) => (_jsxs("option", { value: s.id, children: [s.name, s.is_hq ? ' (HQ)' : ''] }, s.id)))] }), _jsx("span", { "aria-hidden": "true", className: "pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[#8b857c]", children: "\u25BE" })] }), branchStores.find((s) => s.id === storeId)?.is_hq && (_jsx("p", { className: "mt-1.5 text-[13px] text-[#8b857c]", children: "Headquarters branch" }))] }), _jsxs("div", { children: [_jsxs("label", { htmlFor: "tm-name", className: "mb-1.5 block text-sm font-semibold text-[#172033]", children: ["Full Name ", _jsx("span", { className: "text-[#e8794a]", children: "*" })] }), _jsx("input", { id: "tm-name", className: "h-12 w-full rounded-2xl border border-[#e5e0d8] bg-white px-4 text-sm text-[#172033] placeholder:text-[#b0a89e] focus:border-[#172033] focus:outline-none focus:ring-1 focus:ring-[#172033]", placeholder: "e.g., Juan Dela Cruz", value: fullName, onChange: (e) => setFullName(e.target.value), autoComplete: "name" })] }), _jsxs("div", { children: [_jsxs("label", { htmlFor: "tm-email", className: "mb-1.5 block text-sm font-semibold text-[#172033]", children: ["Email Address ", _jsx("span", { className: "text-[#e8794a]", children: "*" })] }), _jsx("input", { id: "tm-email", type: "email", className: "h-12 w-full rounded-2xl border border-[#e5e0d8] bg-white px-4 text-sm text-[#172033] placeholder:text-[#b0a89e] focus:border-[#172033] focus:outline-none focus:ring-1 focus:ring-[#172033]", placeholder: "e.g., juan@example.com", value: email, onChange: (e) => setEmail(e.target.value), autoComplete: "email" })] }), _jsxs("div", { children: [_jsxs("label", { htmlFor: "tm-phone", className: "mb-1.5 block text-sm font-semibold text-[#172033]", children: ["Phone Number ", _jsx("span", { className: "font-normal text-[#8b857c]", children: "(optional)" })] }), _jsx("input", { id: "tm-phone", type: "tel", className: "h-12 w-full rounded-2xl border border-[#e5e0d8] bg-white px-4 text-sm text-[#172033] placeholder:text-[#b0a89e] focus:border-[#172033] focus:outline-none focus:ring-1 focus:ring-[#172033]", placeholder: "e.g., 09171234567", value: phone, onChange: (e) => setPhone(e.target.value), autoComplete: "tel" })] }), _jsxs("div", { children: [_jsxs("label", { htmlFor: "tm-role", className: "mb-1.5 block text-sm font-semibold text-[#172033]", children: ["Operational Role ", _jsx("span", { className: "text-[#e8794a]", children: "*" })] }), _jsx("select", { id: "tm-role", value: role, onChange: (e) => setRole(e.target.value), className: "h-12 w-full rounded-2xl border border-[#e5e0d8] bg-white px-4 text-sm font-medium text-[#172033] focus:border-[#172033] focus:outline-none focus:ring-1 focus:ring-[#172033]", children: ASSIGNABLE.map((r) => (_jsx("option", { value: r, children: roleLabel(r) }, r))) })] }), _jsxs("div", { children: [_jsxs("label", { htmlFor: "tm-password", className: "mb-1.5 block text-sm font-semibold text-[#172033]", children: ["Initial Password ", _jsx("span", { className: "text-[#e8794a]", children: "*" })] }), _jsx(PasswordInput, { id: "tm-password", placeholder: "At least 6 characters", value: password, onChange: (e) => setPassword(e.target.value), autoComplete: "new-password", className: "rounded-2xl border-[#e5e0d8]" }), _jsx("p", { className: "mt-1.5 text-[13px] text-[#8b857c]", children: "Staff can log in with this password and set their PIN on first shift." })] })] }) }), atLimit && (_jsxs("p", { className: "text-[13px] text-[#e8794a]", children: ["Plan user limit reached.", ' ', _jsx(Link, { to: "/billing", className: "font-semibold underline", children: "Upgrade" }), ' ', "to add more."] }))] }) }))] }));
 }

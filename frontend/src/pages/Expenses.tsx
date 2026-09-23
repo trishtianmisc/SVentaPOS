@@ -159,7 +159,7 @@ export default function ExpensesPage() {
             <EmptyState title="No expenses yet" hint="Record your first cost on the left." />
           ) : (
             <>
-              <Table head={['Category', 'Date', 'Method', 'Amount']}>
+              <Table head={['Category', 'Date', 'Method', 'Entered by', 'Amount']}>
                 {items.map((x) => (
                   <tr key={x.id}>
                     <td className="px-3 py-2 first:pl-0">
@@ -171,6 +171,9 @@ export default function ExpensesPage() {
                     <td className="px-3 py-2 text-right text-gray-500">{x.expense_date}</td>
                     <td className="px-3 py-2 text-right capitalize text-gray-500">
                       {x.payment_method}
+                    </td>
+                    <td className="px-3 py-2 text-right text-[13px] text-gray-500">
+                      {x.created_by_name || '—'}
                     </td>
                     <td className="px-3 py-2 text-right font-medium last:pr-0">
                       {formatPHP(x.amount)}

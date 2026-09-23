@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase-client';
 import { api } from '../lib/api-client';
 import { useSessionStore } from '../stores/session';
 import { queryClient } from '../app/queryClient';
+import { landingPathFor } from '../lib/role-perms';
 import { AuthShell, Button, Field, PasswordInput, TextInput, toast } from '../components/ui';
 
 export default function LoginPage() {
@@ -25,7 +26,18 @@ export default function LoginPage() {
         if (cancelled) return;
         const orgId = res.data.data.organization_id;
         if (orgId) localStorage.setItem('ventapos:orgId', orgId);
-        navigate(orgId ? '/pos' : '/onboarding', { replace: true });
+        if (!orgId) {
+          navigate('/onboarding', { replace: true });
+          return;
+        }
+        let landing = '/pos';
+        try {
+          const stores = await api.get('/stores');
+          if (!cancelled) landing = landingPathFor(stores.data.data ?? []);
+        } catch {
+          // stores lookup best-effort — default to store app.
+        }
+        if (!cancelled) navigate(landing, { replace: true });
       } catch {
         // Stay on the form; user can retry or sign in again.
       }
@@ -55,29 +67,39 @@ export default function LoginPage() {
       // setStore() also invalidates store-scoped caches for the new store.
       const setStore = useSessionStore.getState().setStore;
       let storeCount = -1;
+      let storesList: { id: string; role?: string }[] = [];
       try {
         const stores = await api.get('/stores');
-        const list = stores.data.data ?? [];
-        storeCount = list.length;
+        storesList = stores.data.data ?? [];
+        storeCount = storesList.length;
         const current = useSessionStore.getState().storeId;
-        if (list.length === 1) {
-          setStore(list[0].id);
-        } else if (current && !list.some((s: any) => s.id === current)) {
+        if (storesList.length === 1) {
+          setStore(storesList[0].id);
+        } else if (current && !storesList.some((s: any) => s.id === current)) {
           setStore(null);
         }
       } catch {
         // stores lookup is best-effort; catalog still works via org role.
       }
       if (!orgId) {
+        // Pending invite: never dump the cashier into "create my business".
+        const invite = new URLSearchParams(window.location.search).get('token')
+          || localStorage.getItem('ventapos:inviteToken');
+        if (invite) {
+          navigate(`/accept-invite?token=${encodeURIComponent(invite)}`, {
+            replace: true,
+          });
+          return;
+        }
         navigate('/onboarding', { replace: true });
         return;
       }
-      if (storeCount === 0) {
+      if (storeCount === 0 && !landingPathFor(storesList).startsWith('/owner')) {
         setMsg('Logged in — no store assigned yet. Ask an owner to add you.');
         return;
       }
       toast('success', 'Signed in');
-      navigate('/pos', { replace: true });
+      navigate(landingPathFor(storesList), { replace: true });
     } catch {
       setMsg('Logged in (context pending)');
     } finally {

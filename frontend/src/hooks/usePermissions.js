@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api-client';
 import { qk } from '../lib/query-keys';
-import { defaultMatrix, featureForPath, matrixRoleFor, mergeMatrix, takeLegacyMatrix, } from '../lib/role-perms';
+import { defaultMatrix, featureForPath, isOwnerStores, matrixRoleFor, mergeMatrix, takeLegacyMatrix, } from '../lib/role-perms';
 import { useAuthStore } from '../stores/auth-store';
 /**
  * Membership role (from GET /stores) + org role matrix (GET /users/role-permissions).
@@ -65,7 +65,8 @@ export function usePermissions() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [orgId, matrixQuery.data]);
     const matrix = matrixQuery.data ?? defaultMatrix();
-    const isOwner = role === 'owner';
+    // Owner of ANY membership bypasses the matrix (mirrors backend require_feature).
+    const isOwner = role === 'owner' || isOwnerStores(storesQuery.data);
     const can = (feature) => {
         if (isOwner)
             return true;

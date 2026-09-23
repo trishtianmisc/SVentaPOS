@@ -17,12 +17,11 @@ import {
   Badge,
   Button,
   EmptyState,
-  Field,
   Modal,
+  PasswordInput,
   SearchInput,
   Select,
   Spinner,
-  TextInput,
   toast,
 } from '../components/ui';
 
@@ -30,10 +29,29 @@ interface UserRow {
   id: string;
   full_name?: string | null;
   email?: string | null;
+  phone?: string | null;
   status: string;
   role: string;
   is_self: boolean;
   last_login?: string | null;
+}
+
+interface InviteRow {
+  id: string;
+  email: string;
+  role: string;
+  status: string;
+  store_id?: string | null;
+  invite_url?: string | null;
+  expires_at?: string | null;
+  created_at?: string | null;
+}
+
+interface BranchStore {
+  id: string;
+  name: string;
+  code?: string | null;
+  is_hq: boolean;
 }
 
 const ASSIGNABLE = ['owner', 'manager', 'cashier', 'inventory'] as const;
@@ -464,23 +482,36 @@ export default function UsersPage() {
   const [matrix, setMatrix] = useState<PermMatrix>(() => defaultMatrix());
   const [savingPerms, setSavingPerms] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [branchStores, setBranchStores] = useState<BranchStore[]>([]);
+  const [storeId, setStoreId] = useState('');
+  const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [role, setRole] = useState('cashier');
+  const [password, setPassword] = useState('');
   const [addErr, setAddErr] = useState('');
   const [adding, setAdding] = useState(false);
   const [changingId, setChangingId] = useState<string | null>(null);
+  const [invites, setInvites] = useState<InviteRow[]>([]);
+  const [lastInviteUrl, setLastInviteUrl] = useState<string | null>(null);
 
   const load = async () => {
-    const [u, stores, s, usageRes, perms] = await Promise.all([
+    const [u, stores, s, usageRes, perms, inv, branches] = await Promise.all([
       api.get('/users'),
       api.get('/stores').catch(() => ({ data: { data: [] } })),
       api.get('/subscriptions/current').catch(() => ({ data: { data: null } })),
       api.get('/subscriptions/usage').catch(() => ({ data: { data: null } })),
       api.get('/users/role-permissions').catch(() => ({ data: { data: null } })),
+      api.get('/users/invites').catch(() => ({ data: { data: [] } })),
+      api.get('/users/branch-stores').catch(() => ({ data: { data: [] } })),
     ]);
     setItems(u.data.data ?? []);
+    setInvites(inv.data.data ?? []);
     const list = stores.data.data ?? [];
     setIsOwner(list.some((s: any) => s.role === 'owner'));
+    const branchList = (branches.data.data ?? []) as BranchStore[];
+    setBranchStores(branchList);
+    if (!storeId && branchList.length) setStoreId(branchList[0].id);
     setSub(s.data.data);
     setUsage(usageRes.data.data);
     const oid = localStorage.getItem('ventapos:orgId');
@@ -533,32 +564,60 @@ export default function UsersPage() {
   };
 
   const resetAdd = () => {
+    setStoreId(branchStores[0]?.id ?? '');
+    setFullName('');
     setEmail('');
+    setPhone('');
     setRole('cashier');
+    setPassword('');
     setAddErr('');
   };
 
   const add = async () => {
     const value = email.trim();
+    const name = fullName.trim();
+    if (!storeId) {
+      setAddErr('Branch assignment is required.');
+      return;
+    }
+    if (!name) {
+      setAddErr('Full name is required.');
+      return;
+    }
     if (!value) {
       setAddErr('Email is required.');
       return;
     }
+    if (!password || password.length < 6) {
+      setAddErr('Password must be at least 6 characters.');
+      return;
+    }
     setAdding(true);
     setAddErr('');
+    setLastInviteUrl(null);
     try {
-      await api.post('/users', { email: value, role });
+      const res = await api.post('/users', {
+        store_id: storeId,
+        full_name: name,
+        email: value,
+        phone: phone.trim() || null,
+        role,
+        password,
+      });
+      const data = res.data.data;
+      const message = res.data.message ?? 'User added';
       setShowAdd(false);
       resetAdd();
-      toast('success', 'User added');
+      if (data?.status === 'invited' && data?.invite_url) {
+        setLastInviteUrl(data.invite_url);
+        toast('success', 'Invite sent — share the link if email fails');
+      } else {
+        toast('success', message || 'Account created');
+      }
       await load();
     } catch (e: any) {
       const status = e.response?.status;
-      if (status === 404) {
-        setAddErr(
-          'No account with that email. Ask them to register first, then try again.',
-        );
-      } else if (status === 409) {
+      if (status === 409) {
         setAddErr(e.response?.data?.error?.message ?? 'Already a member.');
       } else if (status === 403) {
         setAddErr(
@@ -570,6 +629,38 @@ export default function UsersPage() {
       }
     } finally {
       setAdding(false);
+    }
+  };
+
+  const copyInvite = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      toast('success', 'Invite link copied');
+    } catch {
+      toast('error', 'Could not copy — select the link manually');
+    }
+  };
+
+  const resendInvite = async (id: string) => {
+    setMsg('');
+    try {
+      const res = await api.post(`/users/invites/${id}/resend`);
+      if (res.data.data?.invite_url) setLastInviteUrl(res.data.data.invite_url);
+      toast('success', 'Invite resent');
+      await load();
+    } catch (e: any) {
+      setMsg(e.response?.data?.error?.message ?? 'Could not resend invite');
+    }
+  };
+
+  const revokeInvite = async (id: string) => {
+    setMsg('');
+    try {
+      await api.delete(`/users/invites/${id}`);
+      toast('success', 'Invite revoked');
+      await load();
+    } catch (e: any) {
+      setMsg(e.response?.data?.error?.message ?? 'Could not revoke invite');
     }
   };
 
@@ -629,11 +720,11 @@ export default function UsersPage() {
             setShowAdd(true);
           }}
         >
-          <span className="mr-1.5" aria-hidden>＋</span> Add User
+          <span className="mr-1.5" aria-hidden>＋</span> Add Team Member
         </Button>
       </div>
 
-      <div className="mb-5 inline-flex rounded-full bg-slate-900 p-1">
+      <div className="mb-5 inline-flex rounded-full bg-gray-100 p-1">
         {(
           [
             { key: 'users', label: 'Users', icon: '👥' },
@@ -647,8 +738,8 @@ export default function UsersPage() {
             onClick={() => setTab(t.key)}
             className={`flex items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition ${
               tab === t.key
-                ? 'bg-red-500 text-white shadow'
-                : 'text-slate-300 hover:text-white'
+                ? 'bg-primary text-white shadow'
+                : 'text-gray-600 hover:text-gray-900'
             }`}
           >
             <span aria-hidden>{t.icon}</span>
@@ -665,6 +756,29 @@ export default function UsersPage() {
       />
 
       {msg && <p className="mb-4 text-[13px] text-red-600">{msg}</p>}
+      {lastInviteUrl && (
+        <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+          <p className="text-sm font-semibold text-emerald-900">Invite ready</p>
+          <p className="mb-2 text-[13px] text-emerald-800">
+            Email may be disabled in Supabase — share this link directly.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <code className="min-w-0 flex-1 truncate rounded-lg bg-white px-2 py-1.5 text-xs text-gray-700">
+              {lastInviteUrl}
+            </code>
+            <Button size="compact" variant="secondary" onClick={() => copyInvite(lastInviteUrl)}>
+              Copy link
+            </Button>
+            <button
+              type="button"
+              className="text-xs text-gray-500 underline"
+              onClick={() => setLastInviteUrl(null)}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
       {!isOwner && !loading && tab === 'users' && (
         <p className="mb-4 rounded-xl bg-gray-100 p-4 text-sm text-gray-600">
           Only an owner can add users or change roles. You can still see the team list.
@@ -674,13 +788,65 @@ export default function UsersPage() {
       {loading ? (
         <Spinner label="Loading users…" />
       ) : tab === 'users' ? (
-        <UsersTab
-          items={items}
-          isOwner={isOwner}
-          onChangeRole={changeRole}
-          onRemove={remove}
-          changingId={changingId}
-        />
+        <>
+          <UsersTab
+            items={items}
+            isOwner={isOwner}
+            onChangeRole={changeRole}
+            onRemove={remove}
+            changingId={changingId}
+          />
+          {isOwner && invites.length > 0 && (
+            <div className="mt-6 grid gap-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-gray-800">
+                  Pending invites ({invites.length})
+                </h2>
+                <span className="text-xs text-gray-400">Links expire in 7 days</span>
+              </div>
+              <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+                <ul className="divide-y divide-gray-50">
+                  {invites.map((inv) => (
+                    <li
+                      key={inv.id}
+                      className="flex flex-wrap items-center gap-3 px-4 py-3"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-gray-900">
+                          {inv.email}
+                        </p>
+                          <span className="text-xs text-gray-400">
+                            <Badge tone={roleTone(inv.role)}>{roleLabel(inv.role)}</Badge>
+                            <span className="ml-2">
+                              {inv.expires_at
+                                ? `expires ${relTime(inv.expires_at)}`
+                                : ''}
+                            </span>
+                          </span>
+                      </div>
+                      <div className="flex shrink-0 gap-2">
+                        <Button
+                          size="compact"
+                          variant="secondary"
+                          onClick={() => resendInvite(inv.id)}
+                        >
+                          Resend
+                        </Button>
+                        <Button
+                          size="compact"
+                          variant="danger"
+                          onClick={() => revokeInvite(inv.id)}
+                        >
+                          Revoke
+                        </Button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+        </>
       ) : (
         <RolesTab
           matrix={matrix}
@@ -692,38 +858,229 @@ export default function UsersPage() {
       )}
 
       {showAdd && (
-        <Modal title="Add user" onClose={() => setShowAdd(false)}>
-          <div className="grid gap-3">
-            <p className="text-[13px] text-gray-500">
-              They must already have a VentaPOS account. Enter the email they
-              registered with — no invite email is sent.
-            </p>
-            <Field label="Email" error={addErr || undefined}>
-              <TextInput
-                type="email"
-                autoComplete="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && add()}
-              />
-            </Field>
-            <Field
-              label="Role"
-              hint="Owner: full access. Manager: run the store. Cashier: POS. Staff: basic POS."
-            >
-              <Select value={role} onChange={(e) => setRole(e.target.value)}>
-                {ASSIGNABLE.map((r) => (
-                  <option key={r} value={r}>
-                    {roleLabel(r)}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Button disabled={adding || !email.trim() || atLimit} onClick={add}>
-              {adding ? 'Adding…' : 'Add user'}
-            </Button>
+        <Modal
+          title="Add Team Member"
+          onClose={() => setShowAdd(false)}
+          wide
+          panelClassName="bg-[#FAF7F2]"
+          header={
+            <div className="flex min-w-0 items-center gap-3">
+              <span
+                aria-hidden="true"
+                className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#E8F7F5] text-[#0D9488]"
+              >
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                >
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+              </span>
+              <div className="min-w-0">
+                <p className="text-base font-bold tracking-tight text-[#172033]">
+                  Add Team Member
+                </p>
+                <p className="truncate text-[13px] text-[#8b857c]">
+                  Create a staff account and grant branch permissions.
+                </p>
+              </div>
+            </div>
+          }
+          footer={
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p
+                className={`text-sm ${
+                  addErr ? 'text-[#e8794a]' : 'text-transparent'
+                }`}
+                aria-live="polite"
+              >
+                {addErr || '·'}
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAdd(false)}
+                  className="h-12 rounded-full border border-[#e5e0d8] bg-white px-6 text-sm font-semibold text-[#172033] hover:bg-[#f3efe8]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={
+                    adding ||
+                    !storeId ||
+                    !fullName.trim() ||
+                    !email.trim() ||
+                    !password ||
+                    password.length < 6 ||
+                    atLimit
+                  }
+                  onClick={add}
+                  className="inline-flex h-12 items-center gap-2 rounded-full bg-[#f08a8a] px-6 text-sm font-semibold text-white shadow-sm hover:bg-[#e87a7a] disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  {adding ? 'Creating…' : 'Create Account'}
+                </button>
+              </div>
+            </div>
+          }
+        >
+          <div className="grid gap-4">
+            <div className="rounded-3xl bg-white p-5 shadow-[0_1px_2px_rgba(23,32,51,0.04)]">
+              <div className="grid gap-4">
+                <div>
+                  <label
+                    htmlFor="tm-branch"
+                    className="mb-1.5 block text-sm font-semibold text-[#172033]"
+                  >
+                    Branch Assignment <span className="text-[#e8794a]">*</span>
+                  </label>
+                  <div className="relative">
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#E8A100]"
+                    >
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="currentColor"
+                      >
+                        <path d="M5 16 3 6l5.5 4L12 4l3.5 6L21 6l-2 10H5Zm0 2h14v2H5v-2Z" />
+                      </svg>
+                    </span>
+                    <select
+                      id="tm-branch"
+                      value={storeId}
+                      onChange={(e) => setStoreId(e.target.value)}
+                      className="h-12 w-full appearance-none rounded-2xl border border-[#e5e0d8] bg-white pl-10 pr-10 text-sm font-medium text-[#172033] focus:border-[#172033] focus:outline-none focus:ring-1 focus:ring-[#172033]"
+                    >
+                      {branchStores.length === 0 && (
+                        <option value="">No branches yet</option>
+                      )}
+                      {branchStores.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                          {s.is_hq ? ' (HQ)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[#8b857c]"
+                    >
+                      ▾
+                    </span>
+                  </div>
+                  {branchStores.find((s) => s.id === storeId)?.is_hq && (
+                    <p className="mt-1.5 text-[13px] text-[#8b857c]">
+                      Headquarters branch
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="tm-name"
+                    className="mb-1.5 block text-sm font-semibold text-[#172033]"
+                  >
+                    Full Name <span className="text-[#e8794a]">*</span>
+                  </label>
+                  <input
+                    id="tm-name"
+                    className="h-12 w-full rounded-2xl border border-[#e5e0d8] bg-white px-4 text-sm text-[#172033] placeholder:text-[#b0a89e] focus:border-[#172033] focus:outline-none focus:ring-1 focus:ring-[#172033]"
+                    placeholder="e.g., Juan Dela Cruz"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    autoComplete="name"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="tm-email"
+                    className="mb-1.5 block text-sm font-semibold text-[#172033]"
+                  >
+                    Email Address <span className="text-[#e8794a]">*</span>
+                  </label>
+                  <input
+                    id="tm-email"
+                    type="email"
+                    className="h-12 w-full rounded-2xl border border-[#e5e0d8] bg-white px-4 text-sm text-[#172033] placeholder:text-[#b0a89e] focus:border-[#172033] focus:outline-none focus:ring-1 focus:ring-[#172033]"
+                    placeholder="e.g., juan@example.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    autoComplete="email"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="tm-phone"
+                    className="mb-1.5 block text-sm font-semibold text-[#172033]"
+                  >
+                    Phone Number <span className="font-normal text-[#8b857c]">(optional)</span>
+                  </label>
+                  <input
+                    id="tm-phone"
+                    type="tel"
+                    className="h-12 w-full rounded-2xl border border-[#e5e0d8] bg-white px-4 text-sm text-[#172033] placeholder:text-[#b0a89e] focus:border-[#172033] focus:outline-none focus:ring-1 focus:ring-[#172033]"
+                    placeholder="e.g., 09171234567"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    autoComplete="tel"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="tm-role"
+                    className="mb-1.5 block text-sm font-semibold text-[#172033]"
+                  >
+                    Operational Role <span className="text-[#e8794a]">*</span>
+                  </label>
+                  <select
+                    id="tm-role"
+                    value={role}
+                    onChange={(e) => setRole(e.target.value)}
+                    className="h-12 w-full rounded-2xl border border-[#e5e0d8] bg-white px-4 text-sm font-medium text-[#172033] focus:border-[#172033] focus:outline-none focus:ring-1 focus:ring-[#172033]"
+                  >
+                    {ASSIGNABLE.map((r) => (
+                      <option key={r} value={r}>
+                        {roleLabel(r)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="tm-password"
+                    className="mb-1.5 block text-sm font-semibold text-[#172033]"
+                  >
+                    Initial Password <span className="text-[#e8794a]">*</span>
+                  </label>
+                  <PasswordInput
+                    id="tm-password"
+                    placeholder="At least 6 characters"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    autoComplete="new-password"
+                    className="rounded-2xl border-[#e5e0d8]"
+                  />
+                  <p className="mt-1.5 text-[13px] text-[#8b857c]">
+                    Staff can log in with this password and set their PIN on first shift.
+                  </p>
+                </div>
+              </div>
+            </div>
+
             {atLimit && (
-              <p className="text-xs text-amber-700">
+              <p className="text-[13px] text-[#e8794a]">
                 Plan user limit reached.{' '}
                 <Link to="/billing" className="font-semibold underline">
                   Upgrade

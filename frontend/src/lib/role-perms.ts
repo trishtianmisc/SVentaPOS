@@ -135,10 +135,12 @@ export function matrixRoleFor(apiRole: string): MatrixRole | null {
 
 /** Feature key for a pathname (null = always allowed for signed-in users). */
 export function featureForPath(pathname: string): FeatureKey | null {
-  if (pathname === '/inventory') return 'inventory';
+  // Owner Hub / Owner Console are gated by an explicit owner check in Guard.
+  if (pathname.startsWith('/owner')) return null;
   if (pathname.startsWith('/products')) return 'inventory';
   if (pathname.startsWith('/pos')) return 'pos';
   if (pathname.startsWith('/sales')) return 'sales';
+  if (pathname.startsWith('/shifts')) return 'pos';
   if (pathname.startsWith('/customers')) return 'customers';
   if (pathname.startsWith('/suppliers')) return 'suppliers';
   if (pathname.startsWith('/transfers')) return 'transfers';
@@ -149,6 +151,16 @@ export function featureForPath(pathname: string): FeatureKey | null {
   if (pathname.startsWith('/billing')) return 'billing';
   if (pathname.startsWith('/dashboard')) return 'dashboard';
   return null;
+}
+
+/** True when the user owns at least one store membership (Owner Hub access). */
+export function isOwnerStores(stores: { role?: string }[] | null | undefined): boolean {
+  return (stores ?? []).some((s) => s?.role === 'owner');
+}
+
+/** Post-login landing: owners get the hub; everyone else opens the store app. */
+export function landingPathFor(stores: { role?: string }[] | null | undefined): string {
+  return isOwnerStores(stores) ? '/owner-hub' : '/pos';
 }
 
 /**

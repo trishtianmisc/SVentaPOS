@@ -12,6 +12,9 @@ class UserAdd(BaseModel):
     email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=254)
     role: str = Field(default="cashier", pattern=_ROLE_PATTERN)
     store_id: UUID | None = None
+    full_name: str = Field(default="", max_length=200)
+    phone: str | None = Field(default=None, max_length=64)
+    password: str | None = Field(default=None, min_length=6, max_length=128)
 
 
 class UserRoleUpdate(BaseModel):
@@ -28,6 +31,7 @@ class UserRead(BaseModel):
     id: UUID
     full_name: str | None = None
     email: str | None = None
+    phone: str | None = None
     status: str = "active"
     role: str
     roles: list[UserMembership] = []
@@ -46,3 +50,13 @@ MATRIX_ROLES = ("manager", "cashier", "staff")
 
 # Body is the raw matrix object; validation/cleaning lives in permission_service.
 RoleMatrixUpdate = dict[str, dict[str, bool]]
+
+
+class BranchStore(BaseModel):
+    """Org branch for the Owner Hub / Add Team Member. First store is HQ."""
+    id: UUID
+    name: str
+    code: str | None = None
+    address: str | None = None
+    status: str | None = None
+    is_hq: bool = False

@@ -56,6 +56,14 @@ export default function RegisterPage() {
             // Confirmation off -> session starts immediately; on -> inbox branch.
             // Either way the account is new to this device: drop cached rows.
             queryClient.clear();
+            const invite = new URLSearchParams(window.location.search).get('token');
+            if (invite) {
+                localStorage.setItem('ventapos:inviteToken', invite);
+                navigate(`/accept-invite?token=${encodeURIComponent(invite)}`, {
+                    replace: true,
+                });
+                return;
+            }
             if (data.session)
                 navigate('/onboarding', { replace: true });
             else

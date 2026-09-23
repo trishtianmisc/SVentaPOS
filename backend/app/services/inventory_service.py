@@ -73,7 +73,8 @@ def movements(store_id: str, product_id: str | None = None, limit: int = 50) -> 
     if product_id:
         q = q.eq("product_id", product_id)
     res = q.execute()
-    return res.data or []
+    from app.services.user_service import enrich_actor_names
+    return enrich_actor_names(res.data or [], "created_by")
 
 
 def _friendly(msg: str) -> str:

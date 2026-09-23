@@ -6,6 +6,9 @@
 const token = (name) => `rgb(var(${name}) / <alpha-value>)`;
 
 export default {
+  // Class strategy only: dark: utilities are inert unless <html class="dark">
+  // (no toggle sets it anymore — prevents OS prefers-color-scheme dark UI).
+  darkMode: 'class',
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {

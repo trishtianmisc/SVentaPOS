@@ -32,3 +32,5 @@ class MovementRead(BaseModel):
     reference_type: str | None = None
     notes: str | None = None
     created_at: str
+    created_by: UUID | None = None
+    created_by_name: str | None = None
