@@ -8,6 +8,7 @@ from app.api.v1.dependencies import (
     get_current_organization,
     get_current_store,
     get_current_user,
+    require_feature,
     require_org_role,
 )
 from app.core.exceptions import ForbiddenError
@@ -23,6 +24,12 @@ from app.services import customer_service
 
 router = APIRouter()
 MGR = ["owner", "manager"]
+# POS cart needs customer lookup even if Customers page is off (decision 3).
+_CUST_READ = [Depends(require_feature("pos", "customers"))]
+_CUST_WRITE = [
+    Depends(require_org_role(*MGR)),
+    Depends(require_feature("customers")),
+]
 
 
 def _store(store: dict | None) -> str:
@@ -31,7 +38,8 @@ def _store(store: dict | None) -> str:
     return str(store["store_id"])
 
 
-@router.get("", response_model=SuccessResponse[list[CustomerRead]])
+@router.get("", response_model=SuccessResponse[list[CustomerRead]],
+            dependencies=_CUST_READ)
 def list_customers(
     search: str | None = Query(default=None, max_length=120),
     org_id: UUID = Depends(get_current_organization),
@@ -41,7 +49,7 @@ def list_customers(
 
 
 @router.post("", response_model=SuccessResponse[CustomerRead], status_code=201,
-             dependencies=[Depends(require_org_role(*MGR))])
+             dependencies=_CUST_WRITE)
 def create_customer(
     body: CustomerCreate,
     org_id: UUID = Depends(get_current_organization),
@@ -52,7 +60,8 @@ def create_customer(
     )
 
 
-@router.get("/{customer_id}", response_model=SuccessResponse[CustomerRead])
+@router.get("/{customer_id}", response_model=SuccessResponse[CustomerRead],
+            dependencies=_CUST_READ)
 def get_customer(
     customer_id: UUID,
     org_id: UUID = Depends(get_current_organization),
@@ -63,7 +72,7 @@ def get_customer(
 
 
 @router.put("/{customer_id}", response_model=SuccessResponse[CustomerRead],
-            dependencies=[Depends(require_org_role(*MGR))])
+            dependencies=_CUST_WRITE)
 def update_customer(
     customer_id: UUID,
     body: CustomerUpdate,
@@ -73,7 +82,9 @@ def update_customer(
         str(org_id), str(customer_id), body.model_dump(exclude_unset=True)))
 
 
-@router.get("/{customer_id}/ledger", response_model=SuccessResponse[list[LedgerEntry]])
+@router.get("/{customer_id}/ledger",
+            response_model=SuccessResponse[list[LedgerEntry]],
+            dependencies=[Depends(require_feature("pos", "customers", "credits"))])
 def ledger(
     customer_id: UUID,
     org_id: UUID = Depends(get_current_organization),
@@ -84,7 +95,10 @@ def ledger(
 
 
 @router.post("/{customer_id}/payment", response_model=SuccessResponse[dict],
-             dependencies=[Depends(require_org_role("owner", "manager", "cashier"))])
+             dependencies=[
+                 Depends(require_org_role("owner", "manager", "cashier")),
+                 Depends(require_feature("credits")),
+             ])
 def record_payment(
     customer_id: UUID,
     body: UtangPayment,

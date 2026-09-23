@@ -22,6 +22,8 @@ export interface Product {
   image_path?: string | null;
   active?: boolean;
   created_at?: string | null;
+  /** Phase C: explicit base unit name; falls back to 'pc' until migration. */
+  base_unit_name?: string | null;
 }
 export interface Category {
   id: string;
@@ -45,6 +47,7 @@ export interface SellUnit {
   unit_name: string;
   conversion_factor: number;
   selling_price?: number | null;
+  barcode?: string | null;
 }
 
 const list = (path: string) => api.get(path).then((r) => r.data.data ?? []);
@@ -116,6 +119,20 @@ export function useUnits() {
     queryFn: () => list('/products/units'),
     staleTime: 5 * 60_000,
     enabled: !!userId,
+  });
+}
+
+/**
+ * Sell units for a single product (product form / edit).
+ * Separate cache key from the org-wide useUnits list used by POS.
+ */
+export function useProductUnits(productId?: string) {
+  const userId = useAuthStore((s) => s.userId);
+  return useQuery<SellUnit[]>({
+    queryKey: [...qk.productUnits, productId ?? 'none', userId ?? 'anon'],
+    queryFn: () => list(`/products/${productId}/units`),
+    enabled: !!productId && !!userId,
+    staleTime: 5 * 60_000,
   });
 }
 

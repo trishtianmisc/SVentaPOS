@@ -8,6 +8,7 @@ from app.api.v1.dependencies import (
     get_current_organization,
     get_current_store,
     get_current_user,
+    require_feature,
     require_org_role,
 )
 from app.core.exceptions import ForbiddenError
@@ -22,6 +23,11 @@ from app.services import expense_service
 
 router = APIRouter()
 MGR = ["owner", "manager"]
+_EXPENSES = [Depends(require_feature("expenses"))]
+_EXPENSE_WRITE = [
+    Depends(require_org_role(*MGR)),
+    Depends(require_feature("expenses")),
+]
 
 
 def _ctx(org_id: UUID, store: dict | None) -> tuple[str, str]:
@@ -30,7 +36,8 @@ def _ctx(org_id: UUID, store: dict | None) -> tuple[str, str]:
     return str(org_id), str(store["store_id"])
 
 
-@router.get("/categories", response_model=SuccessResponse[list[ExpenseCategoryRead]])
+@router.get("/categories", response_model=SuccessResponse[list[ExpenseCategoryRead]],
+            dependencies=_EXPENSES)
 def list_categories(
     org_id: UUID = Depends(get_current_organization),
     _=Depends(get_current_user),
@@ -39,7 +46,7 @@ def list_categories(
 
 
 @router.post("/categories", response_model=SuccessResponse[list[ExpenseCategoryRead]],
-             dependencies=[Depends(require_org_role(*MGR))])
+             dependencies=_EXPENSE_WRITE)
 def ensure_defaults(
     org_id: UUID = Depends(get_current_organization),
 ):
@@ -50,7 +57,7 @@ def ensure_defaults(
 
 
 @router.post("/categories/new", response_model=SuccessResponse[ExpenseCategoryRead],
-             status_code=201, dependencies=[Depends(require_org_role(*MGR))])
+             status_code=201, dependencies=_EXPENSE_WRITE)
 def create_category(
     body: ExpenseCategoryCreate,
     org_id: UUID = Depends(get_current_organization),
@@ -61,7 +68,8 @@ def create_category(
     )
 
 
-@router.get("", response_model=SuccessResponse[list[ExpenseRead]])
+@router.get("", response_model=SuccessResponse[list[ExpenseRead]],
+            dependencies=_EXPENSES)
 def list_expenses(
     org_id: UUID = Depends(get_current_organization),
     store: dict | None = Depends(get_current_store),
@@ -72,7 +80,7 @@ def list_expenses(
 
 
 @router.post("", response_model=SuccessResponse[ExpenseRead], status_code=201,
-             dependencies=[Depends(require_org_role(*MGR))])
+             dependencies=_EXPENSE_WRITE)
 def create_expense(
     body: ExpenseCreate,
     org_id: UUID = Depends(get_current_organization),

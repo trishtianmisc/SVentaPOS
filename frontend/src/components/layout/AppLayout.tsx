@@ -4,29 +4,32 @@ import { useAuthStore } from '../../stores/auth-store';
 import { useSessionStore, confirmStoreSwitch } from '../../stores/session';
 import { ToastHost } from '../ui';
 import { api } from '../../lib/api-client';
+import { usePermissions } from '../../hooks/usePermissions';
+import type { FeatureKey } from '../../lib/role-perms';
 
-const NAV = [
-  { to: '/pos', label: 'POS' },
-  { to: '/products', label: 'Products' },
-  { to: '/inventory', label: 'Stock' },
-  { to: '/sales', label: 'Sales' },
-  { to: '/customers', label: 'Customers' },
-  { to: '/suppliers', label: 'Suppliers' },
-  { to: '/transfers', label: 'Transfers' },
-  { to: '/expenses', label: 'Expenses' },
-  { to: '/reports', label: 'Reports' },
-  { to: '/settings', label: 'Settings' },
-  { to: '/billing', label: 'Billing' },
-  { to: '/dashboard', label: 'Dashboard' },
+const NAV: { to: string; label: string; feature: FeatureKey }[] = [
+  { to: '/pos', label: 'POS', feature: 'pos' },
+  { to: '/products', label: 'Products', feature: 'inventory' },
+  { to: '/inventory', label: 'Stock', feature: 'inventory' },
+  { to: '/sales', label: 'Sales', feature: 'sales' },
+  { to: '/customers', label: 'Customers', feature: 'customers' },
+  { to: '/suppliers', label: 'Suppliers', feature: 'suppliers' },
+  { to: '/transfers', label: 'Transfers', feature: 'transfers' },
+  { to: '/expenses', label: 'Expenses', feature: 'expenses' },
+  { to: '/reports', label: 'Reports', feature: 'reports' },
+  { to: '/users', label: 'Users', feature: 'users' },
+  { to: '/settings', label: 'Settings', feature: 'settings' },
+  { to: '/billing', label: 'Billing', feature: 'billing' },
+  { to: '/dashboard', label: 'Dashboard', feature: 'dashboard' },
 ];
 
 // Mobile keeps 5 thumb-friendly tabs; the rest live in Dashboard hub.
-const TABS = [
-  { to: '/pos', label: 'POS' },
-  { to: '/products', label: 'Products' },
-  { to: '/inventory', label: 'Stock' },
-  { to: '/sales', label: 'Sales' },
-  { to: '/dashboard', label: 'More' },
+const TABS: { to: string; label: string; feature: FeatureKey }[] = [
+  { to: '/pos', label: 'POS', feature: 'pos' },
+  { to: '/products', label: 'Products', feature: 'inventory' },
+  { to: '/inventory', label: 'Stock', feature: 'inventory' },
+  { to: '/sales', label: 'Sales', feature: 'sales' },
+  { to: '/dashboard', label: 'More', feature: 'dashboard' },
 ];
 
 function useClock() {
@@ -44,8 +47,11 @@ export default function AppLayout() {
   const storeId = useSessionStore((s) => s.storeId);
   const setStore = useSessionStore((s) => s.setStore);
   const [stores, setStores] = useState<any[]>([]);
+  const { can } = usePermissions();
   const clock = useClock();
   const storeName = stores.find((s: any) => s.id === storeId)?.name ?? null;
+  const navItems = NAV.filter((t) => can(t.feature));
+  const tabItems = TABS.filter((t) => can(t.feature));
 
   useEffect(() => {
     api
@@ -103,7 +109,7 @@ export default function AppLayout() {
           )}
         </div>
         <nav className="flex flex-1 flex-col gap-1 p-3">
-          {NAV.map((t) => (
+          {navItems.map((t) => (
             <NavLink
               key={t.to}
               to={t.to}
@@ -149,7 +155,7 @@ export default function AppLayout() {
 
         {/* Mobile bottom tabs */}
         <nav className="fixed inset-x-0 bottom-0 grid grid-cols-5 border-t bg-white print:hidden md:hidden">
-          {TABS.map((t) => (
+          {tabItems.map((t) => (
             <NavLink
               key={t.to}
               to={t.to}

@@ -8,6 +8,7 @@ from app.api.v1.dependencies import (
     get_current_organization,
     get_current_store,
     get_current_user,
+    require_feature,
     require_role,
 )
 from app.core.exceptions import ConflictError, ForbiddenError
@@ -26,7 +27,10 @@ def _ctx(org_id: UUID, store: dict | None) -> tuple[str, str]:
 
 
 @router.post("", response_model=SuccessResponse[SaleRead], status_code=201,
-             dependencies=[Depends(require_role(*POS_ROLES))])
+             dependencies=[
+                 Depends(require_role(*POS_ROLES)),
+                 Depends(require_feature("pos")),
+             ])
 def create_sale(
     body: SaleCreate,
     org_id: UUID = Depends(get_current_organization),
@@ -59,7 +63,8 @@ def create_sale(
     return SuccessResponse(data=result, message="Sale completed")
 
 
-@router.get("", response_model=SuccessResponse[list[SaleDetail]])
+@router.get("", response_model=SuccessResponse[list[SaleDetail]],
+            dependencies=[Depends(require_feature("sales"))])
 def list_sales(
     org_id: UUID = Depends(get_current_organization),
     store: dict | None = Depends(get_current_store),
@@ -69,7 +74,8 @@ def list_sales(
     return SuccessResponse(data=sale_service.list_sales(o, s))
 
 
-@router.get("/{sale_id}", response_model=SuccessResponse[SaleDetail])
+@router.get("/{sale_id}", response_model=SuccessResponse[SaleDetail],
+            dependencies=[Depends(require_feature("sales"))])
 def get_sale(
     sale_id: UUID,
     org_id: UUID = Depends(get_current_organization),
@@ -81,7 +87,10 @@ def get_sale(
 
 
 @router.post("/{sale_id}/void", response_model=SuccessResponse[dict],
-             dependencies=[Depends(require_role("owner", "manager"))])
+             dependencies=[
+                 Depends(require_role("owner", "manager")),
+                 Depends(require_feature("sales")),
+             ])
 def void_sale(
     sale_id: UUID,
     body: SaleVoid,

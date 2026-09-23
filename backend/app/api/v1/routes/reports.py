@@ -7,13 +7,14 @@ from app.api.v1.dependencies import (
     get_current_organization,
     get_current_store,
     get_current_user,
+    require_feature,
     require_org_role,
 )
 from app.core.exceptions import ForbiddenError
 from app.schemas.common import SuccessResponse
 from app.services import forecast_service, report_service, subscription_service
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_feature("reports"))])
 VIEWERS = ["owner", "manager"]
 
 

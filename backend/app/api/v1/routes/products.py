@@ -7,18 +7,36 @@ from app.api.v1.dependencies import (
     CurrentUser,
     get_current_organization,
     get_current_user,
+    require_feature,
     require_org_role,
 )
 from app.schemas.common import SuccessResponse
-from app.schemas.product import ProductCreate, ProductImportPreview, ProductRead, ProductUpdate, UnitCreate, UnitRead
+from app.schemas.product import (
+    ProductCreate,
+    ProductImportPreview,
+    ProductRead,
+    ProductUpdate,
+    UnitCreate,
+    UnitRead,
+    UnitUpdate,
+)
 from app.services import audit_service, product_service, subscription_service
 
 router = APIRouter()
 
+# Reads: Inventory page needs inventory; POS cart lookup needs pos (decision 3).
+_PRODUCT_READ = [Depends(require_feature("pos", "inventory"))]
+# Writes: inventory feature only (POS implication does not grant writes).
+_PRODUCT_WRITE = [
+    Depends(require_org_role("owner", "manager")),
+    Depends(require_feature("inventory")),
+]
+
 
 # NOTE: /units must be declared before /{product_id} so "units" is not
 # captured as a product id.
-@router.get("/units", response_model=SuccessResponse[list[UnitRead]])
+@router.get("/units", response_model=SuccessResponse[list[UnitRead]],
+            dependencies=_PRODUCT_READ)
 def list_all_units(
     org_id: UUID = Depends(get_current_organization),
     _=Depends(get_current_user),
@@ -26,7 +44,8 @@ def list_all_units(
     return SuccessResponse(data=product_service.list_all_units(str(org_id)))
 
 
-@router.get("", response_model=SuccessResponse[list[ProductRead]])
+@router.get("", response_model=SuccessResponse[list[ProductRead]],
+            dependencies=_PRODUCT_READ)
 def list_products(
     search: str | None = Query(default=None, max_length=120),
     org_id: UUID = Depends(get_current_organization),
@@ -35,7 +54,8 @@ def list_products(
     return SuccessResponse(data=product_service.list_products(str(org_id), search))
 
 
-@router.get("/{product_id}", response_model=SuccessResponse[ProductRead])
+@router.get("/{product_id}", response_model=SuccessResponse[ProductRead],
+            dependencies=_PRODUCT_READ)
 def get_product(
     product_id: UUID,
     org_id: UUID = Depends(get_current_organization),
@@ -45,7 +65,7 @@ def get_product(
 
 
 @router.post("", response_model=SuccessResponse[ProductRead], status_code=201,
-             dependencies=[Depends(require_org_role("owner", "manager"))])
+             dependencies=_PRODUCT_WRITE)
 def create_product(
     body: ProductCreate,
     org_id: UUID = Depends(get_current_organization),
@@ -61,7 +81,7 @@ def create_product(
 
 
 @router.put("/{product_id}", response_model=SuccessResponse[ProductRead],
-            dependencies=[Depends(require_org_role("owner", "manager"))])
+            dependencies=_PRODUCT_WRITE)
 def update_product(
     product_id: UUID,
     body: ProductUpdate,
@@ -81,7 +101,7 @@ def update_product(
 
 
 @router.delete("/{product_id}", response_model=SuccessResponse[ProductRead],
-               dependencies=[Depends(require_org_role("owner", "manager"))])
+               dependencies=_PRODUCT_WRITE)
 def delete_product(
     product_id: UUID,
     org_id: UUID = Depends(get_current_organization),
@@ -93,7 +113,7 @@ def delete_product(
 
 
 @router.post("/import", response_model=SuccessResponse[ProductImportPreview],
-             dependencies=[Depends(require_org_role("owner", "manager"))])
+             dependencies=_PRODUCT_WRITE)
 def import_preview():
     """Phase 1 stub: validates headers only. Full CSV import lands in Phase 2."""
     return SuccessResponse(data=ProductImportPreview())
@@ -102,7 +122,8 @@ def import_preview():
 # Sell units (Phase 4 C1) ----------------------------------------------------
 
 
-@router.get("/{product_id}/units", response_model=SuccessResponse[list[UnitRead]])
+@router.get("/{product_id}/units", response_model=SuccessResponse[list[UnitRead]],
+            dependencies=_PRODUCT_READ)
 def list_units(
     product_id: UUID,
     org_id: UUID = Depends(get_current_organization),
@@ -114,7 +135,7 @@ def list_units(
 
 @router.post("/{product_id}/units", response_model=SuccessResponse[UnitRead],
              status_code=201,
-             dependencies=[Depends(require_org_role("owner", "manager"))])
+             dependencies=_PRODUCT_WRITE)
 def create_unit(
     product_id: UUID,
     body: UnitCreate,
@@ -128,9 +149,26 @@ def create_unit(
     )
 
 
+@router.put("/{product_id}/units/{unit_id}", response_model=SuccessResponse[UnitRead],
+            dependencies=_PRODUCT_WRITE)
+def update_unit(
+    product_id: UUID,
+    unit_id: UUID,
+    body: UnitUpdate,
+    org_id: UUID = Depends(get_current_organization),
+    _=Depends(get_current_user),
+):
+    return SuccessResponse(
+        data=product_service.update_unit(
+            str(org_id), str(product_id), str(unit_id),
+            body.model_dump(exclude_unset=True)),
+        message="Unit updated",
+    )
+
+
 @router.delete("/{product_id}/units/{unit_id}",
                response_model=SuccessResponse[dict],
-               dependencies=[Depends(require_org_role("owner", "manager"))])
+               dependencies=_PRODUCT_WRITE)
 def delete_unit(
     product_id: UUID,
     unit_id: UUID,

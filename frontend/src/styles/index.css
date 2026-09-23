@@ -30,28 +30,97 @@
 /* Mobile-first POS defaults. Keep POS interactions fast and touch-friendly. */
 
 /* 80mm thermal receipt. App chrome already hides via print:hidden. */
+.receipt-80 {
+  color: #000;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.receipt-80 .rcpt-sep {
+  border: none;
+  border-top: 1px dashed #000;
+  margin: 6px 0;
+}
+
+.receipt-80 .rcpt-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: baseline;
+}
+
+.receipt-80 .rcpt-row > span:last-child {
+  text-align: right;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 @media print {
   @page {
     size: 80mm auto;
     margin: 3mm;
   }
 
+  html,
   body {
-    background: #fff;
+    background: #fff !important;
+    margin: 0;
+    padding: 0;
+    min-height: 0 !important;
+    height: auto !important;
   }
 
-  .receipt-80 {
-    width: 72mm;
-    margin: 0 auto;
+  /* Hide the entire app (root, nav, POS page, modals)… */
+  body > * {
+    display: none !important;
+  }
+
+  /* …except the receipt portal. */
+  body > #rcpt-portal {
+    display: block !important;
+    position: static !important;
+    inset: auto !important;
+    overflow: visible !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    z-index: auto !important;
+    width: auto !important;
+    height: auto !important;
+    max-width: none !important;
+  }
+
+  body > #rcpt-portal .receipt-80 {
+    position: static !important;
+    display: block !important;
+    width: 72mm !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: #fff !important;
     color: #000;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 12px;
-    line-height: 1.5;
+    line-height: 1.45;
+    overflow: visible !important;
+    transform: none !important;
+    opacity: 1 !important;
   }
 
-  .receipt-80 hr {
-    border: none;
-    border-top: 1px dashed #000;
+  /* New sale / Print buttons never print. */
+  body > #rcpt-portal .receipt-80 button,
+  body > #rcpt-portal .print\:hidden {
+    display: none !important;
+  }
+
+  body > #rcpt-portal .rcpt-sep,
+  body > #rcpt-portal .receipt-80 hr {
+    border: none !important;
+    border-top: 1px dashed #000 !important;
     margin: 6px 0;
   }
 }

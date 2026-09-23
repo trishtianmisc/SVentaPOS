@@ -1,4 +1,4 @@
-import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
+import { createBrowserRouter, Navigate, Outlet, useLocation } from 'react-router-dom';
 import LoginPage from '../pages/Login';
 import RegisterPage from '../pages/Register';
 import OnboardingPage from '../pages/Onboarding';
@@ -13,15 +13,23 @@ import SuppliersPage from '../pages/Suppliers';
 import ExpensesPage from '../pages/Expenses';
 import TransfersPage from '../pages/Transfers';
 import ReportsPage from '../pages/Reports';
+import UsersPage from '../pages/Users';
 import SettingsPage from '../pages/Settings';
 import BillingPage from '../pages/Billing';
 import AppLayout from '../components/layout/AppLayout';
 import { useAuthStore } from '../stores/auth-store';
+import { usePermissions } from '../hooks/usePermissions';
 
 function Guard({ children }: { children: JSX.Element }) {
   const { userId, initialized } = useAuthStore();
+  const location = useLocation();
+  const { canPath, firstAllowedPath, loadingRole } = usePermissions();
   if (!initialized) return <div className="p-6">Loading…</div>;
   if (!userId) return <Navigate to="/login" replace />;
+  if (loadingRole) return <div className="p-6">Loading…</div>;
+  if (!canPath(location.pathname)) {
+    return <Navigate to={firstAllowedPath} replace />;
+  }
   return children;
 }
 
@@ -75,6 +83,7 @@ export const router = createBrowserRouter([
           { path: '/expenses', element: <ExpensesPage /> },
           { path: '/transfers', element: <TransfersPage /> },
           { path: '/reports', element: <ReportsPage /> },
+          { path: '/users', element: <UsersPage /> },
           { path: '/settings', element: <SettingsPage /> },
           { path: '/billing', element: <BillingPage /> },
           { path: '/dashboard', element: <DashboardPage /> },

@@ -175,6 +175,43 @@ def require_org_role(*allowed: str):
     return checker
 
 
+def require_feature(*features: str):
+    """Org role-matrix gate. Owner always passes. Non-owner needs at least
+    one of `features` enabled for any membership role (multi = OR).
+
+    Stack with require_role / require_org_role — matrix only further
+    restricts; it never expands fixed role floors."""
+    allowed = tuple(f.lower() for f in features)
+
+    async def checker(
+        user: CurrentUser = Depends(get_current_user),
+        org_id = Depends(get_current_organization),
+        store: dict | None = Depends(get_current_store),
+    ) -> CurrentUser:
+        from app.services import permission_service
+
+        roles: set[str] = set()
+        if store and store.get("role"):
+            roles.add(str(store["role"]).lower())
+        for s in user.stores or []:
+            if s.get("role"):
+                roles.add(str(s["role"]).lower())
+        if "owner" in roles:
+            return user
+        if not roles:
+            raise ForbiddenError("Insufficient role")
+        matrix = permission_service.get_matrix(str(org_id))
+        if any(
+            permission_service.can(role, feat, matrix)
+            for role in roles
+            for feat in allowed
+        ):
+            return user
+        raise ForbiddenError("Feature not permitted")
+
+    return checker
+
+
 async def require_platform_admin(
     user: CurrentUser = Depends(get_current_user),
 ) -> CurrentUser:

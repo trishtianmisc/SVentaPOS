@@ -8,6 +8,7 @@ from app.api.v1.dependencies import (
     get_current_organization,
     get_current_store,
     get_current_user,
+    require_feature,
     require_role,
 )
 from app.schemas.common import SuccessResponse
@@ -15,6 +16,7 @@ from app.schemas.inventory import InventoryAdjust, InventoryRead, MovementRead
 from app.services import audit_service, inventory_service
 
 router = APIRouter()
+_INV_READ = [Depends(require_feature("inventory"))]
 
 
 def _store_id(store: dict | None) -> str:
@@ -25,7 +27,8 @@ def _store_id(store: dict | None) -> str:
     return str(store["store_id"])
 
 
-@router.get("", response_model=SuccessResponse[list[InventoryRead]])
+@router.get("", response_model=SuccessResponse[list[InventoryRead]],
+            dependencies=_INV_READ)
 def list_inventory(
     store: dict | None = Depends(get_current_store),
     _=Depends(get_current_user),
@@ -33,7 +36,8 @@ def list_inventory(
     return SuccessResponse(data=inventory_service.list_inventory(_store_id(store)))
 
 
-@router.get("/low-stock", response_model=SuccessResponse[list[InventoryRead]])
+@router.get("/low-stock", response_model=SuccessResponse[list[InventoryRead]],
+            dependencies=_INV_READ)
 def low_stock(
     store: dict | None = Depends(get_current_store),
     _=Depends(get_current_user),
@@ -41,7 +45,8 @@ def low_stock(
     return SuccessResponse(data=inventory_service.low_stock(_store_id(store)))
 
 
-@router.get("/movements", response_model=SuccessResponse[list[MovementRead]])
+@router.get("/movements", response_model=SuccessResponse[list[MovementRead]],
+            dependencies=_INV_READ)
 def movements(
     store: dict | None = Depends(get_current_store),
     _=Depends(get_current_user),
@@ -49,7 +54,8 @@ def movements(
     return SuccessResponse(data=inventory_service.movements(_store_id(store)))
 
 
-@router.get("/{product_id}", response_model=SuccessResponse[InventoryRead])
+@router.get("/{product_id}", response_model=SuccessResponse[InventoryRead],
+            dependencies=_INV_READ)
 def get_stock(
     product_id: UUID,
     store: dict | None = Depends(get_current_store),
@@ -60,7 +66,10 @@ def get_stock(
 
 
 @router.post("/adjust", response_model=SuccessResponse[dict],
-             dependencies=[Depends(require_role("owner", "manager", "inventory"))])
+             dependencies=[
+                 Depends(require_role("owner", "manager", "inventory")),
+                 Depends(require_feature("inventory")),
+             ])
 def adjust(
     body: InventoryAdjust,
     org_id: UUID = Depends(get_current_organization),

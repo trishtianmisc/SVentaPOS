@@ -8,6 +8,7 @@ from app.api.v1.dependencies import (
     get_current_organization,
     get_current_store,
     get_current_user,
+    require_feature,
     require_role,
 )
 from app.core.exceptions import ForbiddenError
@@ -17,6 +18,8 @@ from app.services import shift_service
 
 router = APIRouter()
 SHIFT_ROLES = ["owner", "manager", "cashier", "inventory"]
+# Shifts support the POS floor; require pos feature on open/close + reads.
+_POS = [Depends(require_feature("pos"))]
 
 
 def _ctx(org_id: UUID, store: dict | None) -> tuple[str, str]:
@@ -25,7 +28,8 @@ def _ctx(org_id: UUID, store: dict | None) -> tuple[str, str]:
     return str(org_id), str(store["store_id"])
 
 
-@router.get("/current", response_model=SuccessResponse[ShiftRead | None])
+@router.get("/current", response_model=SuccessResponse[ShiftRead | None],
+            dependencies=_POS)
 def current_shift(
     org_id: UUID = Depends(get_current_organization),
     store: dict | None = Depends(get_current_store),
@@ -35,7 +39,8 @@ def current_shift(
     return SuccessResponse(data=shift_service.current(o, s))
 
 
-@router.get("", response_model=SuccessResponse[list[ShiftRead]])
+@router.get("", response_model=SuccessResponse[list[ShiftRead]],
+            dependencies=_POS)
 def shift_history(
     org_id: UUID = Depends(get_current_organization),
     store: dict | None = Depends(get_current_store),
@@ -46,7 +51,10 @@ def shift_history(
 
 
 @router.post("/open", response_model=SuccessResponse[ShiftRead], status_code=201,
-             dependencies=[Depends(require_role(*SHIFT_ROLES))])
+             dependencies=[
+                 Depends(require_role(*SHIFT_ROLES)),
+                 Depends(require_feature("pos")),
+             ])
 def open_shift(
     body: ShiftOpen,
     org_id: UUID = Depends(get_current_organization),
@@ -61,7 +69,10 @@ def open_shift(
 
 
 @router.post("/{shift_id}/close", response_model=SuccessResponse[ShiftRead],
-             dependencies=[Depends(require_role(*SHIFT_ROLES))])
+             dependencies=[
+                 Depends(require_role(*SHIFT_ROLES)),
+                 Depends(require_feature("pos")),
+             ])
 def close_shift(
     shift_id: UUID,
     body: ShiftClose,

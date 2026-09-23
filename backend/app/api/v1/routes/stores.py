@@ -8,6 +8,7 @@ from app.api.v1.dependencies import (
     get_current_organization,
     get_current_store,
     get_current_user,
+    require_feature,
     require_org_role,
     require_role,
 )
@@ -39,7 +40,10 @@ def my_stores(user: CurrentUser = Depends(get_current_user)):
 
 
 @router.post("", response_model=SuccessResponse[StoreWithRole], status_code=201,
-             dependencies=[Depends(require_org_role("owner"))])
+             dependencies=[
+                 Depends(require_org_role("owner")),
+                 Depends(require_feature("settings")),
+             ])
 def create_store(
     body: StoreCreate,
     org_id: UUID = Depends(get_current_organization),
@@ -70,7 +74,10 @@ def create_store(
 
 
 @router.patch("/settings", response_model=SuccessResponse[StoreWithRole],
-              dependencies=[Depends(require_role("owner", "manager"))])
+              dependencies=[
+                  Depends(require_role("owner", "manager")),
+                  Depends(require_feature("settings")),
+              ])
 def update_settings(
     body: StoreSettingsUpdate,
     org_id: UUID = Depends(get_current_organization),

@@ -1,5 +1,6 @@
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api-client';
@@ -7,7 +8,25 @@ import { qk } from '../lib/query-keys';
 import { formatPHP } from '../utils/currency';
 import { Badge, toast } from '../components/ui';
 import { useSessionStore } from '../stores/session';
+import { baseEquivalent, baseUnitName, convertQtyBetween, formatQty, qtyStep, roundQty, unitFactor, } from '../lib/units';
 import { useCategories, useCustomers, useInventory, useProducts, useUnits, } from '../hooks/useCatalog';
+/** Thermal receipt helpers (screen + print share the same monospace look). */
+function shortDate(d) {
+    return `${d.getMonth() + 1}/${d.getDate()}/${String(d.getFullYear()).slice(2)}`;
+}
+function longDate(d) {
+    return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+}
+function shortTime(d) {
+    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+function longTime(d) {
+    return d.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+    });
+}
 const METHODS = ['cash', 'gcash', 'maya', 'card', 'bank', 'other', 'utang'];
 const NEEDS_REF = new Set(['gcash', 'maya', 'card', 'bank']);
 const QUICK_CASH = [20, 50, 100, 200, 500, 1000];
@@ -38,25 +57,98 @@ function isWholesale(p, qty) {
     const m = p.wholesale_min_qty;
     return w != null && m != null && qty >= m;
 }
-/** Factor converting a line's sell unit to base units ('pc' = 1). */
-function lineFactor(l, units) {
-    if (l.unit === 'pc')
+/** Factor converting a line's sell unit to base units (base factor = 1). */
+function lineFactorFor(l, units) {
+    const base = baseUnitName(l.product).toLowerCase();
+    if (l.unit.toLowerCase() === base)
         return 1;
-    return Number(units?.find((u) => u.unit_name === l.unit)?.conversion_factor ?? 1);
+    return unitFactor(l.unit, units);
 }
 /** Client mirror of the server unit price (server stays authoritative):
  * explicit unit price wins, else tiered base price × factor. Tier triggers
  * on base-unit quantity. */
 function linePrice(l, units) {
-    const f = lineFactor(l, units);
+    const f = lineFactorFor(l, units);
     const base = unitPrice(l.product, l.qty * f);
-    if (l.unit === 'pc')
+    const baseName = baseUnitName(l.product).toLowerCase();
+    if (l.unit.toLowerCase() === baseName)
         return base;
-    const sp = units?.find((u) => u.unit_name === l.unit)?.selling_price;
+    const sp = units?.find((u) => u.unit_name.toLowerCase() === l.unit.toLowerCase())?.selling_price;
     return sp != null ? Number(sp) : Math.round(base * f * 100) / 100;
 }
 function lineIsWholesale(l, units) {
-    return isWholesale(l.product, l.qty * lineFactor(l, units));
+    return isWholesale(l.product, l.qty * lineFactorFor(l, units));
+}
+/**
+ * Editable cart quantity. Local draft so intermediate keystrokes
+ * ("" / "0." / "12.") never remove the line. Commit uses roundQty:
+ * measurement → 2 dp; count → snap near-integers only, keep real
+ * decimals (0.5 kg-as-pc, 1.5 pack from a unit switch).
+ */
+function CartQtyInput({ qty, unit, max, name, onSetQty, onRemove, }) {
+    const [draft, setDraft] = useState(formatQty(qty));
+    const focused = useRef(false);
+    // Sync from cart when qty changes externally (±, unit switch) and we are idle.
+    useEffect(() => {
+        if (!focused.current)
+            setDraft(formatQty(qty));
+    }, [qty, unit]);
+    const parse = (raw) => {
+        const cleaned = raw.replace(/[^0-9.]/g, '');
+        return cleaned;
+    };
+    const commit = () => {
+        const raw = draft.trim();
+        if (raw === '' || raw === '.') {
+            onRemove();
+            return;
+        }
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n <= 0) {
+            onRemove();
+            return;
+        }
+        // Do NOT Math.round count here — that turns typed 0.5 into 1.
+        // roundQty: kg/L → 2 dp; count → keep 0.5 / 1.5, snap 1.0000001 → 1.
+        const committed = roundQty(n, unit);
+        if (committed <= 0) {
+            onRemove();
+            return;
+        }
+        if (committed > max + 1e-9) {
+            setDraft(formatQty(qty));
+            onSetQty(committed); // setQty surfaces the stock message and rejects
+            return;
+        }
+        setDraft(formatQty(committed));
+        onSetQty(committed);
+    };
+    return (_jsx("input", { "aria-label": `Quantity for ${name}`, className: "w-16 border-0 bg-transparent text-center text-sm font-bold focus:outline-none focus:ring-1 focus:ring-primary", inputMode: "decimal", value: draft, onFocus: () => {
+            focused.current = true;
+        }, onChange: (e) => {
+            const raw = parse(e.target.value);
+            setDraft(raw);
+            // Live preview for valid positive numbers; never remove mid-typing.
+            if (raw === '' || raw === '.')
+                return;
+            const n = Number(raw);
+            if (Number.isFinite(n) && n > 0)
+                onSetQty(n);
+        }, onKeyDown: (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                commit();
+                focused.current = false;
+                e.target.blur();
+            }
+            else if (e.key === 'Escape') {
+                setDraft(formatQty(qty));
+                e.target.blur();
+            }
+        }, onBlur: () => {
+            focused.current = false;
+            commit();
+        } }));
 }
 export default function POSPage() {
     const qc = useQueryClient();
@@ -131,6 +223,11 @@ export default function POSPage() {
     const storeId = useSessionStore((s) => s.storeId);
     // Store profile for the receipt header (name/address/TIN) + VAT flag.
     const [storeInfo, setStoreInfo] = useState(null);
+    // Cashier display name for the printed receipt (from /auth/me).
+    const [cashierName, setCashierName] = useState('');
+    // Sale timestamp + payments captured once checkout succeeds.
+    const [receiptAt, setReceiptAt] = useState(null);
+    const [receiptPays, setReceiptPays] = useState([]);
     useEffect(() => {
         api
             .get('/stores')
@@ -140,6 +237,12 @@ export default function POSPage() {
         })
             .catch(() => undefined);
     }, [storeId, storeVersion]);
+    useEffect(() => {
+        api
+            .get('/auth/me')
+            .then((r) => setCashierName(r.data.data?.full_name ?? ''))
+            .catch(() => undefined);
+    }, []);
     const count = cart.reduce((s, l) => s + l.qty, 0);
     useEffect(() => {
         localStorage.setItem('ventapos:cartCount', String(count));
@@ -162,6 +265,8 @@ export default function POSPage() {
             if (e.key === 'Escape') {
                 setReceipt(null);
                 setReceiptLines([]);
+                setReceiptAt(null);
+                setReceiptPays([]);
             }
         };
         document.addEventListener('keydown', onKey);
@@ -197,25 +302,64 @@ export default function POSPage() {
             const u = unit ?? line.unit;
             if (qty <= 0)
                 return u === line.unit ? c.filter((l) => l.product.id !== id) : c;
-            const f = u === 'pc'
-                ? 1
-                : Number(unitsByProduct[id]?.find((x) => x.unit_name === u)
-                    ?.conversion_factor ?? 1);
-            const max = line.product.track_inventory ? (stock[id]?.qty ?? 0) / f : Infinity;
-            if (qty > max) {
-                setMsg(`Only ${max} ${u} left in stock`);
+            const f = lineFactorFor({ ...line, unit: u }, unitsByProduct[id]);
+            const max = line.product.track_inventory
+                ? (stock[id]?.qty ?? 0) / f
+                : Infinity;
+            const rounded = roundQty(qty, u);
+            if (rounded > max + 1e-9) {
+                setMsg(`Only ${formatQty(max)} ${u} left in stock`);
                 return c;
             }
-            return c.map((l) => (l.product.id === id ? { ...l, qty, unit: u } : l));
+            return c.map((l) => l.product.id === id ? { ...l, qty: rounded, unit: u } : l);
         });
+    };
+    /**
+     * Change selected unit while preserving base quantity:
+     *   base = qty * fromFactor; next = base / toFactor
+     * Never silent-rounds away stock accuracy (see roundQty).
+     */
+    const switchUnit = (id, nextUnit) => {
+        setCart((c) => {
+            const line = c.find((l) => l.product.id === id);
+            if (!line || line.unit === nextUnit)
+                return c;
+            const units = unitsByProduct[id];
+            const newQty = convertQtyBetween(line.qty, line.unit, nextUnit, units, baseUnitName(line.product));
+            if (newQty <= 0)
+                return c;
+            const f = lineFactorFor({ ...line, unit: nextUnit }, units);
+            const max = line.product.track_inventory
+                ? (stock[id]?.qty ?? 0) / f
+                : Infinity;
+            if (newQty > max + 1e-9) {
+                setMsg(`Only ${formatQty(max)} ${nextUnit} left in stock (base equivalent exceeded)`);
+                return c;
+            }
+            return c.map((l) => l.product.id === id ? { ...l, unit: nextUnit, qty: newQty } : l);
+        });
+    };
+    const bumpQty = (id, direction) => {
+        const line = cart.find((l) => l.product.id === id);
+        if (!line)
+            return;
+        const step = qtyStep(line.unit);
+        const next = roundQty(line.qty + direction * step, line.unit);
+        setQty(id, next);
     };
     const add = (p) => {
         if (outOfStock(p))
             return;
         const line = cart.find((l) => l.product.id === p.id);
-        setQty(p.id, line ? line.qty + 1 : 1);
-        if (!line)
-            setCart((c) => [...c, { product: p, qty: 1, discount: 0, unit: 'pc' }]);
+        if (!line) {
+            setCart((c) => [
+                ...c,
+                { product: p, qty: 1, discount: 0, unit: baseUnitName(p) },
+            ]);
+            return;
+        }
+        const step = qtyStep(line.unit);
+        setQty(p.id, roundQty(line.qty + step, line.unit));
     };
     const clearCart = () => {
         if (cart.length === 0)
@@ -326,12 +470,18 @@ export default function POSPage() {
         setCharging(true);
         try {
             const res = await api.post('/sales', {
-                items: cart.map((l) => ({
-                    product_id: l.product.id,
-                    quantity: l.qty,
-                    discount: l.discount,
-                    ...(l.unit !== 'pc' ? { unit_name: l.unit } : {}),
-                })),
+                items: cart.map((l) => {
+                    const base = baseUnitName(l.product);
+                    return {
+                        product_id: l.product.id,
+                        quantity: l.qty,
+                        discount: l.discount,
+                        // Server still accepts omit for the implicit base unit name.
+                        ...(l.unit.toLowerCase() !== base.toLowerCase()
+                            ? { unit_name: l.unit }
+                            : {}),
+                    };
+                }),
                 payments: [
                     {
                         method,
@@ -345,13 +495,28 @@ export default function POSPage() {
                 limit_reason: reason || undefined,
             });
             setReceipt(res.data.data);
+            setReceiptAt(new Date());
+            setReceiptPays([
+                { payment_method: method, amount, reference: reference.trim() || null },
+            ]);
             setCart([]);
             setTendered('');
             setReference('');
-            // Line items for the printed receipt (best-effort; totals already shown).
+            // Line items + exact sale timestamp for the printed receipt.
             api
                 .get(`/sales/${res.data.data.sale_id}`)
-                .then((d) => setReceiptLines(d.data.data.items ?? []))
+                .then((d) => {
+                const sale = d.data.data ?? {};
+                setReceiptLines(sale.items ?? []);
+                if (sale.created_at)
+                    setReceiptAt(new Date(sale.created_at));
+                if (Array.isArray(sale.payments) && sale.payments.length) {
+                    setReceiptPays(sale.payments);
+                }
+                if (sale.receipt_number || sale.total != null) {
+                    setReceipt((prev) => ({ ...prev, ...sale, paid: sale.paid ?? prev?.paid, change: sale.change ?? prev?.change }));
+                }
+            })
                 .catch(() => setReceiptLines([]));
             // Stock and balances changed server-side: mark stale so the next
             // read refetches exactly once, instead of refetching everything here.
@@ -394,12 +559,12 @@ export default function POSPage() {
                                 })] }), _jsx("button", { type: "button", onClick: () => setShowClose(true), className: "ml-auto h-9 rounded-lg border border-gray-300 px-3 text-sm font-medium text-gray-700 hover:bg-gray-100", children: "Close shift" })] })) : (_jsxs(_Fragment, { children: [_jsx(Badge, { tone: "amber", children: "No open shift" }), _jsx("span", { className: "text-sm text-gray-600", children: "Open a shift to start selling." }), _jsx("input", { "aria-label": "Opening float", className: "ml-auto h-9 w-28 rounded-lg border border-gray-300 px-2 text-sm", placeholder: "Float \u20B1", inputMode: "decimal", value: openFloat, onChange: (e) => setOpenFloat(e.target.value) }), _jsx("button", { type: "button", disabled: shiftBusy, onClick: openShift, className: "h-9 rounded-lg bg-primary px-4 text-sm font-medium text-white disabled:opacity-40", children: shiftBusy ? 'Opening…' : 'Open shift' })] })) }), msg && _jsx("p", { className: "mt-2 text-[13px] text-red-600", children: msg }), _jsxs("div", { className: "mt-4 grid gap-4 xl:grid-cols-[1fr_380px]", children: [_jsxs("section", { "aria-label": "Product catalog", children: [_jsxs("div", { className: "flex gap-2", children: [_jsx("button", { type: "button", onClick: () => searchRef.current?.focus(), title: "Focus search (Ctrl+K). Barcode scanners type here.", className: "h-11 shrink-0 rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-100", children: "Scan" }), _jsx("input", { ref: searchRef, className: "h-11 min-w-0 flex-1 rounded-lg border border-gray-300 bg-white px-3 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary", placeholder: "Scan barcode or type a product  (Ctrl+K)", "aria-label": "Search products", value: query, onChange: (e) => setQuery(e.target.value) }), _jsx("button", { type: "button", "aria-pressed": inStockOnly, title: "Show in-stock only", onClick: () => setInStockOnly((v) => !v), className: `h-11 shrink-0 rounded-lg border px-3 text-sm font-medium ${inStockOnly ? 'border-primary bg-primary-soft text-primary-ink' : 'border-gray-300 bg-white text-gray-600'}`, children: "Stock" }), _jsx("div", { role: "group", "aria-label": "Catalog view", className: "flex shrink-0 overflow-hidden rounded-lg border border-gray-300", children: ['grid', 'list'].map((v) => (_jsx("button", { type: "button", "aria-pressed": view === v, onClick: () => setView(v), className: `h-11 px-3 text-sm capitalize ${view === v ? 'bg-primary font-semibold text-white' : 'bg-white text-gray-500'}`, children: v }, v))) })] }), categories.length > 0 && (_jsxs("div", { className: "mt-2 flex flex-wrap gap-2", role: "group", "aria-label": "Categories", children: [_jsxs("button", { onClick: () => setCat(null), "aria-pressed": cat === null, className: `h-9 rounded-full px-3 text-[13px] ${cat === null ? 'bg-primary font-medium text-white' : 'border border-gray-300 bg-white text-gray-600'}`, children: ["All \u00B7 ", products.length] }), categories.map((c) => (_jsxs("button", { onClick: () => setCat(cat === c.id ? null : c.id), "aria-pressed": cat === c.id, className: `h-9 rounded-full px-3 text-[13px] ${cat === c.id ? 'bg-primary font-medium text-white' : 'border border-gray-300 bg-white text-gray-600'}`, children: [c.name, " \u00B7 ", catCounts[c.id] ?? 0] }, c.id)))] })), msg && (_jsx("p", { role: "alert", className: "mt-2 text-sm text-red-600", children: msg })), view === 'grid' ? (_jsx("div", { className: "mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4 xl:grid-cols-5", children: visible.map((p) => {
                                     const oos = outOfStock(p);
                                     const line = cart.find((l) => l.product.id === p.id);
-                                    return (_jsxs("div", { className: `flex flex-col items-center rounded-xl border bg-white p-3 text-center ${oos ? 'opacity-40' : ''}`, children: [_jsxs("button", { disabled: oos, onClick: () => add(p), "aria-label": `Add ${p.name} to order`, className: `flex w-full flex-col items-center ${oos ? '' : 'hover:opacity-80'}`, children: [_jsx("span", { className: `flex h-10 w-10 items-center justify-center rounded-full text-lg font-bold ${tileColor(p.id)}`, children: p.name.charAt(0).toUpperCase() }), _jsx("span", { className: "mt-1 w-full truncate text-xs font-medium", children: p.name }), _jsx("span", { className: "text-xs font-bold text-primary-ink", children: formatPHP(p.retail_price) })] }), line ? (_jsxs("span", { className: "mt-2 inline-flex items-center rounded-full bg-primary px-1 py-0.5 text-white", children: [_jsx("button", { "aria-label": `Decrease ${p.name}`, className: "px-2 py-0.5", onClick: () => setQty(p.id, line.qty - 1), children: "\u2212" }), _jsx("span", { className: "min-w-6 text-center text-sm font-bold", children: line.qty }), _jsx("button", { "aria-label": `Increase ${p.name}`, className: "px-2 py-0.5", onClick: () => add(p), children: "+" })] })) : (_jsx("span", { className: "mt-2", children: oos ? (_jsx(Badge, { tone: "red", children: "Out of stock" })) : lowStock(p) ? (_jsxs(Badge, { tone: "amber", children: ["Low \u00B7 ", stock[p.id]?.qty, " left"] })) : (_jsx("span", { className: "text-[11px] text-gray-400", children: p.track_inventory ? `${stock[p.id]?.qty ?? 0} left` : '•' })) }))] }, p.id));
+                                    return (_jsxs("div", { className: `flex flex-col items-center rounded-xl border bg-white p-3 text-center ${oos ? 'opacity-40' : ''}`, children: [_jsxs("button", { disabled: oos, onClick: () => add(p), "aria-label": `Add ${p.name} to order`, className: `flex w-full flex-col items-center ${oos ? '' : 'hover:opacity-80'}`, children: [_jsx("span", { className: `flex h-10 w-10 items-center justify-center rounded-full text-lg font-bold ${tileColor(p.id)}`, children: p.name.charAt(0).toUpperCase() }), _jsx("span", { className: "mt-1 w-full truncate text-xs font-medium", children: p.name }), _jsx("span", { className: "text-xs font-bold text-primary-ink", children: formatPHP(p.retail_price) })] }), line ? (_jsxs("span", { className: "mt-2 inline-flex items-center rounded-full bg-primary px-1 py-0.5 text-white", children: [_jsx("button", { "aria-label": `Decrease ${p.name}`, className: "px-2 py-0.5", onClick: () => bumpQty(p.id, -1), children: "\u2212" }), _jsx("span", { className: "min-w-6 text-center text-sm font-bold", children: line.qty }), _jsx("button", { "aria-label": `Increase ${p.name}`, className: "px-2 py-0.5", onClick: () => add(p), children: "+" })] })) : (_jsx("span", { className: "mt-2", children: oos ? (_jsx(Badge, { tone: "red", children: "Out of stock" })) : lowStock(p) ? (_jsxs(Badge, { tone: "amber", children: ["Low \u00B7 ", stock[p.id]?.qty, " left"] })) : (_jsx("span", { className: "text-[11px] text-gray-400", children: p.track_inventory ? `${stock[p.id]?.qty ?? 0} left` : '•' })) }))] }, p.id));
                                 }) })) : (_jsxs("ul", { className: "mt-3 divide-y rounded-xl border bg-white px-4", children: [visible.map((p) => {
                                         const oos = outOfStock(p);
                                         const line = cart.find((l) => l.product.id === p.id);
-                                        return (_jsxs("li", { className: "flex items-center justify-between gap-2 py-2", children: [_jsxs("button", { disabled: oos, onClick: () => add(p), className: "min-w-0 flex-1 truncate text-left text-sm font-medium disabled:text-gray-400", children: [p.name, _jsxs("span", { className: "ml-2 text-xs text-gray-400", children: [formatPHP(p.retail_price), oos ? ' · out of stock' : lowStock(p) ? ` · low (${stock[p.id]?.qty})` : ''] })] }), line ? (_jsxs("span", { className: "inline-flex items-center", children: [_jsx("button", { "aria-label": `Decrease ${p.name}`, className: "rounded px-2 py-1 hover:bg-gray-100", onClick: () => setQty(p.id, line.qty - 1), children: "\u2212" }), _jsx("span", { className: "w-8 text-center text-sm font-bold", children: line.qty }), _jsx("button", { "aria-label": `Increase ${p.name}`, className: "rounded px-2 py-1 hover:bg-gray-100", onClick: () => add(p), children: "+" })] })) : (_jsx("button", { disabled: oos, onClick: () => add(p), className: "h-9 shrink-0 rounded-lg bg-primary px-3 text-sm font-medium text-white disabled:opacity-40", children: "Add" }))] }, p.id));
-                                    }), visible.length === 0 && (_jsx("li", { className: "py-4 text-center text-sm text-gray-400", children: "No products match. Try another search." }))] }))] }), _jsxs("section", { "aria-label": "Current order", className: "h-fit rounded-xl border border-gray-200 bg-white lg:sticky lg:top-4", children: [_jsxs("div", { className: "flex items-center justify-between border-b border-gray-100 p-4", children: [_jsxs("h2", { className: "text-base font-semibold", children: ["Current Order", ' ', count > 0 && (_jsxs("span", { className: "ml-1 rounded-full bg-primary px-2 py-0.5 text-xs font-bold text-white", children: [count, " items"] }))] }), _jsx("button", { onClick: clearCart, disabled: cart.length === 0, className: "text-[13px] font-medium text-gray-400 hover:text-red-700 disabled:opacity-40", children: "Clear" })] }), _jsxs("div", { className: "p-4", children: [_jsx("div", { role: "group", "aria-label": "Order party", className: "grid grid-cols-2 gap-2", children: [
+                                        return (_jsxs("li", { className: "flex items-center justify-between gap-2 py-2", children: [_jsxs("button", { disabled: oos, onClick: () => add(p), className: "min-w-0 flex-1 truncate text-left text-sm font-medium disabled:text-gray-400", children: [p.name, _jsxs("span", { className: "ml-2 text-xs text-gray-400", children: [formatPHP(p.retail_price), oos ? ' · out of stock' : lowStock(p) ? ` · low (${stock[p.id]?.qty})` : ''] })] }), line ? (_jsxs("span", { className: "inline-flex items-center", children: [_jsx("button", { "aria-label": `Decrease ${p.name}`, className: "rounded px-2 py-1 hover:bg-gray-100", onClick: () => bumpQty(p.id, -1), children: "\u2212" }), _jsx("span", { className: "w-8 text-center text-sm font-bold", children: line.qty }), _jsx("button", { "aria-label": `Increase ${p.name}`, className: "rounded px-2 py-1 hover:bg-gray-100", onClick: () => add(p), children: "+" })] })) : (_jsx("button", { disabled: oos, onClick: () => add(p), className: "h-9 shrink-0 rounded-lg bg-primary px-3 text-sm font-medium text-white disabled:opacity-40", children: "Add" }))] }, p.id));
+                                    }), visible.length === 0 && (_jsx("li", { className: "py-4 text-center text-sm text-gray-400", children: "No products match. Try another search." }))] }))] }), _jsxs("section", { "aria-label": "Current order", className: "h-fit rounded-xl border border-gray-20 bg-white lg:sticky lg:top-4", children: [_jsxs("div", { className: "flex items-center justify-between border-b border-gray-100 p-4 ", children: [_jsxs("h2", { className: "text-base font-semibold", children: ["Current Order", ' ', count > 0 && (_jsxs("span", { className: "ml-1 rounded-full bg-primary px-2 py-0.5 text-xs font-bold text-white", children: [count, " items"] }))] }), _jsx("button", { onClick: clearCart, disabled: cart.length === 0, className: "text-[13px] font-medium text-gray-400 hover:text-red-700 disabled:opacity-40", children: "Clear" })] }), _jsxs("div", { className: "p-4", children: [_jsx("div", { role: "group", "aria-label": "Order party", className: "grid grid-cols-2 gap-2", children: [
                                             { key: true, label: 'Walk-in' },
                                             { key: false, label: 'Customer' },
                                         ].map((o) => (_jsx("button", { onClick: () => pickParty(o.key), "aria-pressed": walkIn === o.key, className: `h-11 rounded-xl text-sm font-medium ${walkIn === o.key ? 'bg-primary font-semibold text-white' : 'border border-gray-300 text-gray-600'}`, children: o.label }, o.label))) }), _jsxs("ul", { className: "mt-2 max-h-64 divide-y divide-gray-100 overflow-auto", children: [cart.map((l) => {
@@ -407,21 +572,44 @@ export default function POSPage() {
                                                 const price = linePrice(l, units);
                                                 const gross = price * l.qty;
                                                 const ws = lineIsWholesale(l, units);
-                                                const f = lineFactor(l, units);
+                                                const f = lineFactorFor(l, units);
+                                                const baseName = baseUnitName(l.product);
+                                                const baseQty = baseEquivalent(l.qty, l.unit, units, baseName);
                                                 const max = l.product.track_inventory
                                                     ? (stock[l.product.id]?.qty ?? 0) / f
                                                     : Infinity;
-                                                return (_jsxs("li", { className: "py-3", children: [_jsxs("div", { className: "flex items-start justify-between gap-2", children: [_jsxs("div", { className: "min-w-0", children: [_jsx("p", { className: "truncate text-sm font-medium", children: l.product.name }), _jsxs("p", { className: "text-xs text-gray-500", children: [formatPHP(price), " per ", l.unit, ws && (_jsx("span", { className: "ml-1 rounded-full bg-primary-soft px-1.5 py-0.5 text-[11px] font-semibold text-primary-ink", children: "Wholesale" }))] })] }), _jsx("p", { className: "text-sm font-semibold", children: formatPHP(gross - Math.min(l.discount, gross)) })] }), _jsxs("div", { className: "mt-1 flex items-center justify-between", children: [_jsxs("span", { className: "inline-flex items-center gap-1", children: [_jsxs("span", { className: "inline-flex items-center rounded-full border border-gray-200", children: [_jsx("button", { "aria-label": `Decrease ${l.product.name}`, className: "px-2.5 py-1", onClick: () => setQty(l.product.id, l.qty - 1), children: "\u2212" }), _jsxs("span", { className: "min-w-10 text-center text-sm font-bold", children: [l.qty, _jsxs("span", { className: "font-normal text-gray-400", children: [" ", l.unit] })] }), _jsx("button", { "aria-label": `Increase ${l.product.name}`, className: "px-2.5 py-1", onClick: () => add(l.product), children: "+" })] }), units.length > 0 && (_jsxs("select", { "aria-label": `Unit for ${l.product.name}`, className: "h-8 rounded-lg border border-gray-200 bg-white px-1 text-xs", value: l.unit, onChange: (e) => setQty(l.product.id, l.qty, e.target.value), children: [_jsx("option", { value: "pc", children: "pc" }), units.map((u) => (_jsx("option", { value: u.unit_name, children: u.unit_name }, u.id)))] }))] }), discFor === l.product.id ? (_jsxs("span", { className: "inline-flex items-center gap-1", children: [_jsx("input", { "aria-label": `Discount for ${l.product.name}`, className: "h-9 w-20 rounded-lg border border-gray-300 px-2 text-sm", inputMode: "decimal", autoFocus: true, value: discVal, onChange: (e) => setDiscVal(e.target.value), onKeyDown: (e) => {
+                                                return (_jsxs("li", { className: "py-3", children: [_jsxs("div", { className: "flex items-start justify-between gap-2", children: [_jsxs("div", { className: "min-w-0", children: [_jsx("p", { className: "truncate text-sm font-medium", children: l.product.name }), _jsxs("p", { className: "text-xs text-gray-500", children: [formatPHP(price), " per ", l.unit, ws && (_jsx("span", { className: "ml-1 rounded-full bg-primary-soft px-1.5 py-0.5 text-[11px] font-semibold text-primary-ink", children: "Wholesale" }))] }), f !== 1 || l.unit.toLowerCase() !== baseName.toLowerCase() ? (_jsxs("p", { className: "text-[11px] text-gray-400", children: ["\u2248 ", formatQty(baseQty), " ", baseName] })) : null] }), _jsx("p", { className: "text-sm font-semibold", children: formatPHP(gross - Math.min(l.discount, gross)) })] }), _jsxs("div", { className: "mt-1 flex items-center justify-between", children: [_jsxs("span", { className: "inline-flex items-center gap-1", children: [_jsxs("span", { className: "inline-flex items-center rounded-full border border-gray-200", children: [_jsx("button", { "aria-label": `Decrease ${l.product.name}`, className: "px-2.5 py-1", onClick: () => bumpQty(l.product.id, -1), children: "\u2212" }), _jsx(CartQtyInput, { qty: l.qty, unit: l.unit, max: max, name: l.product.name, onSetQty: (n) => setQty(l.product.id, n), onRemove: () => setQty(l.product.id, 0) }), _jsx("span", { className: "pr-1 text-sm font-normal text-gray-400", children: l.unit }), _jsx("button", { "aria-label": `Increase ${l.product.name}`, className: "px-2.5 py-1", onClick: () => bumpQty(l.product.id, 1), children: "+" })] }), units.length > 0 && (_jsxs("select", { "aria-label": `Unit for ${l.product.name}`, className: "h-8 rounded-lg border border-gray-200 bg-white px-1 text-xs", value: l.unit, onChange: (e) => switchUnit(l.product.id, e.target.value), children: [_jsx("option", { value: baseName, children: baseName }), units.map((u) => (_jsx("option", { value: u.unit_name, children: u.unit_name }, u.id)))] }))] }), discFor === l.product.id ? (_jsxs("span", { className: "inline-flex items-center gap-1", children: [_jsx("input", { "aria-label": `Discount for ${l.product.name}`, className: "h-9 w-20 rounded-lg border border-gray-300 px-2 text-sm", inputMode: "decimal", autoFocus: true, value: discVal, onChange: (e) => setDiscVal(e.target.value), onKeyDown: (e) => {
                                                                                 if (e.key === 'Enter')
                                                                                     applyDisc(l.product.id);
                                                                             } }), _jsx("button", { className: "h-9 rounded-lg bg-primary px-2 text-sm font-medium text-white", onClick: () => applyDisc(l.product.id), children: "OK" })] })) : (_jsxs("span", { className: "inline-flex items-center gap-2", children: [l.discount > 0 && (_jsxs("span", { className: "text-xs text-gray-500", children: ["\u2212", formatPHP(l.discount)] })), _jsx("button", { className: "text-xs font-medium text-gray-500 hover:text-primary", onClick: () => {
                                                                                 setDiscFor(l.product.id);
                                                                                 setDiscVal(l.discount ? String(l.discount) : '');
-                                                                            }, children: "Discount" }), _jsx("button", { "aria-label": `Remove ${l.product.name}`, className: "text-gray-400 hover:text-red-700", onClick: () => setQty(l.product.id, 0), children: "\u00D7" })] }))] }), l.qty >= max && max !== Infinity && (_jsxs("p", { className: "mt-1 text-xs text-amber-700", children: ["Only ", max, " ", l.unit, " in stock"] }))] }, l.product.id));
-                                            }), cart.length === 0 && (_jsx("li", { className: "py-4 text-center text-sm text-gray-400", children: "Tap a product to start an order." }))] }), _jsxs("div", { className: "mt-2 border-t border-gray-100 pt-3 text-sm", children: [_jsxs("p", { className: "flex justify-between text-gray-500", children: [_jsx("span", { children: "Net Sales" }), _jsx("span", { children: formatPHP(subtotal) })] }), lineDisc > 0 && (_jsxs("p", { className: "flex justify-between text-gray-500", children: [_jsx("span", { children: "Discount" }), _jsxs("span", { children: ["\u2212", formatPHP(lineDisc)] })] })), _jsxs("p", { className: "mt-1 flex justify-between text-base font-bold", children: [_jsx("span", { children: "Total" }), _jsx("span", { children: formatPHP(estimate) })] })] }), _jsx("div", { className: "mt-3 grid grid-cols-3 gap-1", role: "group", "aria-label": "Payment method", children: METHODS.map((m) => (_jsx("button", { onClick: () => pickMethod(m), "aria-pressed": method === m, className: `h-10 rounded-lg border px-2 text-xs capitalize ${method === m ? 'border-primary bg-primary-soft font-bold text-primary-ink' : 'border-gray-200 text-gray-600'}`, children: m }, m))) }), method === 'utang' && (_jsxs("select", { "aria-label": "Customer for utang", className: "mt-2 h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm", value: customerId, onChange: (e) => setCustomerId(e.target.value), children: [_jsx("option", { value: "", children: "Select customer\u2026" }), customers.map((c) => (_jsxs("option", { value: c.id, children: [c.name, " (", formatPHP(c.balance ?? 0), ")"] }, c.id)))] })), NEEDS_REF.has(method) && (_jsx("input", { "aria-label": `${method} reference number`, className: "mt-2 h-11 w-full rounded-lg border border-gray-300 px-3 text-sm", placeholder: `${method.toUpperCase()} reference no.`, value: reference, onChange: (e) => setReference(e.target.value) })), method === 'cash' && (_jsxs(_Fragment, { children: [_jsx("input", { "aria-label": "Cash received", className: "mt-2 h-11 w-full rounded-lg border border-gray-300 px-3 text-sm", placeholder: "Cash received", value: tendered, onChange: (e) => setTendered(e.target.value), inputMode: "decimal" }), _jsxs("div", { className: "mt-2 grid grid-cols-3 gap-1", children: [_jsx("button", { className: "h-9 rounded-lg border border-gray-200 px-2 text-xs font-medium", onClick: () => setTendered(String(estimate)), children: "Exact" }), QUICK_CASH.filter((q) => q >= estimate)
+                                                                            }, children: "Discount" }), _jsx("button", { "aria-label": `Remove ${l.product.name}`, className: "text-gray-400 hover:text-red-700", onClick: () => setQty(l.product.id, 0), children: "\u00D7" })] }))] }), l.qty >= max && max !== Infinity && (_jsxs("p", { className: "mt-1 text-xs text-amber-700", children: ["Only ", formatQty(max), " ", l.unit, " in stock"] }))] }, l.product.id));
+                                            }), cart.length > 0 && (_jsx("li", { className: "py-2 text-center text-[11px] text-gray-400", children: "Inventory is deducted in base units." })), cart.length === 0 && (_jsx("li", { className: "py-4 text-center text-sm text-gray-400", children: "Tap a product to start an order." }))] }), _jsxs("div", { className: "mt-2 border-t border-gray-100 pt-3 text-sm", children: [_jsxs("p", { className: "flex justify-between text-gray-500", children: [_jsx("span", { children: "Net Sales" }), _jsx("span", { children: formatPHP(subtotal) })] }), lineDisc > 0 && (_jsxs("p", { className: "flex justify-between text-gray-500", children: [_jsx("span", { children: "Discount" }), _jsxs("span", { children: ["\u2212", formatPHP(lineDisc)] })] })), _jsxs("p", { className: "mt-1 flex justify-between text-base font-bold", children: [_jsx("span", { children: "Total" }), _jsx("span", { children: formatPHP(estimate) })] })] }), _jsx("div", { className: "mt-3 grid grid-cols-3 gap-1", role: "group", "aria-label": "Payment method", children: METHODS.map((m) => (_jsx("button", { onClick: () => pickMethod(m), "aria-pressed": method === m, className: `h-10 rounded-lg border px-2 text-xs capitalize ${method === m ? 'border-primary bg-primary-soft font-bold text-primary-ink' : 'border-gray-200 text-gray-600'}`, children: m }, m))) }), method === 'utang' && (_jsxs("select", { "aria-label": "Customer for utang", className: "mt-2 h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm", value: customerId, onChange: (e) => setCustomerId(e.target.value), children: [_jsx("option", { value: "", children: "Select customer\u2026" }), customers.map((c) => (_jsxs("option", { value: c.id, children: [c.name, " (", formatPHP(c.balance ?? 0), ")"] }, c.id)))] })), NEEDS_REF.has(method) && (_jsx("input", { "aria-label": `${method} reference number`, className: "mt-2 h-11 w-full rounded-lg border border-gray-300 px-3 text-sm", placeholder: `${method.toUpperCase()} reference no.`, value: reference, onChange: (e) => setReference(e.target.value) })), method === 'cash' && (_jsxs(_Fragment, { children: [_jsx("input", { "aria-label": "Cash received", className: "mt-2 h-11 w-full rounded-lg border border-gray-300 px-3 text-sm", placeholder: "Cash received", value: tendered, onChange: (e) => setTendered(e.target.value), inputMode: "decimal" }), _jsxs("div", { className: "mt-2 grid grid-cols-3 gap-1", children: [_jsx("button", { className: "h-9 rounded-lg border border-gray-200 px-2 text-xs font-medium", onClick: () => setTendered(String(estimate)), children: "Exact" }), QUICK_CASH.filter((q) => q >= estimate)
                                                         .slice(0, 5)
-                                                        .map((q) => (_jsx("button", { className: "h-9 rounded-lg border border-gray-200 px-2 text-xs font-medium", onClick: () => setTendered(String(q)), children: q }, q)))] }), Number(tendered) >= estimate && estimate > 0 && (_jsxs("p", { className: "mt-2 text-sm", children: ["Change: ", _jsx("span", { className: "font-bold", children: formatPHP(Number(tendered) - estimate) })] }))] })), _jsxs("div", { className: "mt-3 grid grid-cols-[1fr_auto] gap-2", children: [_jsx(Link, { to: "/sales", className: "inline-flex h-12 items-center justify-center rounded-xl border border-gray-300 text-sm font-medium text-gray-700", children: "History" }), _jsx("button", { disabled: !canCharge || charging, onClick: () => checkout(), className: "inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-primary px-6 font-bold text-white disabled:opacity-40", children: charging ? 'Charging…' : `Checkout ${formatPHP(estimate)}` })] }), _jsx("p", { className: "mt-1 text-center text-[11px] text-gray-400", children: "F4 to charge \u00B7 Ctrl+K to search" })] })] })] }), cart.length > 0 && (_jsxs("button", { onClick: () => window.scrollTo({ top: 0, behavior: 'smooth' }), className: "fixed inset-x-4 bottom-20 rounded-xl bg-primary-hover p-3 font-bold text-white shadow-lg lg:hidden", children: ["Cart \u00B7 ", count, " items \u00B7 ", formatPHP(estimate), " \u2014 review & charge"] })), showClose && shift && (_jsx("div", { role: "dialog", "aria-modal": "true", "aria-label": "Close shift", className: "fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center", children: _jsxs("div", { className: "w-full max-w-sm rounded-t-2xl bg-white p-6 sm:rounded-2xl", children: [_jsx("p", { className: "font-bold", children: "Close shift" }), _jsx("p", { className: "mt-1 text-sm text-gray-500", children: "Count the cash drawer and enter the total." }), _jsxs("label", { className: "mt-3 block text-[13px] font-medium text-gray-600", children: ["Counted cash", _jsx("input", { className: "mt-1 h-11 w-full rounded-lg border border-gray-300 px-3 text-sm", placeholder: "\u20B1", inputMode: "decimal", value: closeCash, onChange: (e) => setCloseCash(e.target.value) })] }), _jsxs("label", { className: "mt-3 block text-[13px] font-medium text-gray-600", children: ["Notes (optional)", _jsx("input", { className: "mt-1 h-11 w-full rounded-lg border border-gray-300 px-3 text-sm", placeholder: "e.g. handed over to Aling Maria", value: closeNotes, onChange: (e) => setCloseNotes(e.target.value) })] }), _jsxs("div", { className: "mt-4 grid grid-cols-2 gap-2", children: [_jsx("button", { className: "h-10 rounded-lg border border-gray-300 text-sm font-medium", onClick: () => setShowClose(false), children: "Back" }), _jsx("button", { className: "h-10 rounded-lg bg-primary text-sm font-medium text-white disabled:opacity-40", disabled: shiftBusy || !closeCash, onClick: closeShift, children: shiftBusy ? 'Closing…' : 'Close + Z-report' })] })] }) })), zReport && (_jsx("div", { role: "dialog", "aria-modal": "true", "aria-label": "Z-report", className: "fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center", children: _jsxs("div", { className: "w-full max-w-sm rounded-t-2xl bg-white p-6 sm:rounded-2xl", children: [_jsx("p", { className: "text-center font-bold", children: "Z-Report" }), _jsxs("p", { className: "text-center text-sm text-gray-500", children: [zReport.z_report?.sales_count ?? 0, " sales \u00B7 Revenue", ' ', formatPHP(zReport.z_report?.revenue ?? 0)] }), _jsx("hr", {}), (zReport.z_report?.by_method ?? []).map((m) => (_jsxs("p", { className: "flex justify-between py-1 text-sm", children: [_jsx("span", { className: "capitalize", children: m.method }), _jsx("span", { children: formatPHP(m.total) })] }, m.method))), _jsx("hr", {}), _jsxs("div", { className: "mt-2 space-y-1 text-sm", children: [(zReport.z_report?.vat_collected ?? 0) > 0 && (_jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "VAT collected" }), _jsx("span", { children: formatPHP(zReport.z_report?.vat_collected ?? 0) })] })), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Opening float" }), _jsx("span", { children: formatPHP(zReport.z_report?.opening_float ?? 0) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Cash tendered" }), _jsx("span", { children: formatPHP(zReport.z_report?.cash_tendered ?? 0) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Change given" }), _jsx("span", { children: formatPHP(zReport.z_report?.change_given ?? 0) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Expected cash" }), _jsx("span", { className: "font-bold", children: formatPHP(zReport.expected_cash ?? 0) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Counted cash" }), _jsx("span", { className: "font-bold", children: formatPHP(zReport.counted_cash ?? 0) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Variance" }), _jsx(Badge, { tone: Number(zReport.variance) === 0 ? 'green' : 'red', children: formatPHP(Number(zReport.variance) || 0) })] })] }), _jsx("button", { className: "mt-4 h-10 w-full rounded-lg bg-primary text-sm font-medium text-white", onClick: () => setZReport(null), children: "Done \u2014 open a new shift to continue" })] }) })), receipt && (_jsx("div", { role: "dialog", "aria-modal": "true", "aria-label": `Receipt ${receipt.receipt_number}`, className: "fixed inset-0 z-50 flex items-end justify-center bg-black/40 print:static print:block print:bg-white sm:items-center", children: _jsxs("div", { className: "receipt-80 w-full max-w-sm rounded-t-2xl bg-white p-6 sm:rounded-2xl print:max-w-none print:rounded-none print:p-0 print:shadow-none", children: [_jsx("p", { className: "text-center font-bold", children: "VentaPOS" }), _jsx("p", { className: "text-center", children: receipt.receipt_number }), storeInfo && (_jsxs("p", { className: "text-center text-gray-500", children: [storeInfo.name, storeInfo.address ? ` · ${storeInfo.address}` : '', storeInfo.tin ? ` · TIN ${storeInfo.tin}` : ''] })), _jsxs("p", { className: "text-center text-gray-500", children: [new Date().toLocaleString(), " \u00B7 ", method.toUpperCase()] }), _jsx("hr", {}), receiptLines.map((i) => (_jsxs("p", { className: "flex justify-between", children: [_jsxs("span", { children: [i.product_name_snapshot, " \u00D7 ", i.unit_quantity ?? i.quantity, ' ', i.unit_name ?? 'pc'] }), _jsx("span", { children: formatPHP(i.line_total) })] }, i.id))), _jsx("hr", {}), _jsxs("div", { className: "mt-4 space-y-1 text-sm print:mt-0", children: [(receipt.tax_amount ?? 0) > 0 && (_jsxs(_Fragment, { children: [_jsxs("p", { className: "flex justify-between text-gray-500", children: [_jsx("span", { children: "VATABLE SALES" }), _jsx("span", { children: formatPHP(Math.round(((receipt.vatable_amount ?? 0) - (receipt.tax_amount ?? 0)) * 100) / 100) })] }), _jsxs("p", { className: "flex justify-between text-gray-500", children: [_jsxs("span", { children: ["VAT (", receipt.tax_rate ?? 12, "%)"] }), _jsx("span", { children: formatPHP(receipt.tax_amount ?? 0) })] }), _jsxs("p", { className: "flex justify-between text-gray-500", children: [_jsx("span", { children: "VAT EXEMPT" }), _jsx("span", { children: formatPHP(Math.round((receipt.total - (receipt.vatable_amount ?? 0)) * 100) / 100) })] })] })), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Total" }), _jsx("span", { className: "font-bold", children: formatPHP(receipt.total) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsxs("span", { children: ["Paid (", method, ")"] }), _jsx("span", { children: formatPHP(receipt.paid) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Change" }), _jsx("span", { className: "font-bold", children: formatPHP(receipt.change) })] }), receipt.utang > 0 && (_jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "New balance" }), _jsx("span", { className: "font-bold", children: formatPHP(receipt.balance ?? 0) })] }))] }), _jsx("p", { className: "mt-2 hidden text-center print:block", children: "Thank you for shopping!" }), _jsxs("div", { className: "mt-5 grid grid-cols-2 gap-2 print:hidden", children: [_jsx("button", { className: "h-10 rounded-lg border border-gray-300 text-sm font-medium", onClick: () => {
-                                        setReceipt(null);
-                                        setReceiptLines([]);
-                                    }, children: "New sale" }), _jsx("button", { className: "h-10 rounded-lg bg-primary text-sm font-medium text-white", onClick: () => window.print(), children: "Print" })] })] }) }))] }));
+                                                        .map((q) => (_jsx("button", { className: "h-9 rounded-lg border border-gray-200 px-2 text-xs font-medium", onClick: () => setTendered(String(q)), children: q }, q)))] }), Number(tendered) >= estimate && estimate > 0 && (_jsxs("p", { className: "mt-2 text-sm", children: ["Change: ", _jsx("span", { className: "font-bold", children: formatPHP(Number(tendered) - estimate) })] }))] })), _jsxs("div", { className: "mt-3 grid grid-cols-[1fr_auto] gap-2", children: [_jsx(Link, { to: "/sales", className: "inline-flex h-12 items-center justify-center rounded-xl border border-gray-300 text-sm font-medium text-gray-700", children: "History" }), _jsx("button", { disabled: !canCharge || charging, onClick: () => checkout(), className: "inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-primary px-6 font-bold text-white disabled:opacity-40", children: charging ? 'Charging…' : `Checkout ${formatPHP(estimate)}` })] }), _jsx("p", { className: "mt-1 text-center text-[11px] text-gray-400", children: "F4 to charge \u00B7 Ctrl+K to search" })] })] })] }), cart.length > 0 && (_jsxs("button", { onClick: () => window.scrollTo({ top: 0, behavior: 'smooth' }), className: "fixed inset-x-4 bottom-20 rounded-xl bg-primary-hover p-3 font-bold text-white shadow-lg lg:hidden", children: ["Cart \u00B7 ", count, " items \u00B7 ", formatPHP(estimate), " \u2014 review & charge"] })), showClose && shift && (_jsx("div", { role: "dialog", "aria-modal": "true", "aria-label": "Close shift", className: "fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center", children: _jsxs("div", { className: "w-full max-w-sm rounded-t-2xl bg-white p-6 sm:rounded-2xl", children: [_jsx("p", { className: "font-bold", children: "Close shift" }), _jsx("p", { className: "mt-1 text-sm text-gray-500", children: "Count the cash drawer and enter the total." }), _jsxs("label", { className: "mt-3 block text-[13px] font-medium text-gray-600", children: ["Counted cash", _jsx("input", { className: "mt-1 h-11 w-full rounded-lg border border-gray-300 px-3 text-sm", placeholder: "\u20B1", inputMode: "decimal", value: closeCash, onChange: (e) => setCloseCash(e.target.value) })] }), _jsxs("label", { className: "mt-3 block text-[13px] font-medium text-gray-600", children: ["Notes (optional)", _jsx("input", { className: "mt-1 h-11 w-full rounded-lg border border-gray-300 px-3 text-sm", placeholder: "e.g. handed over to Aling Maria", value: closeNotes, onChange: (e) => setCloseNotes(e.target.value) })] }), _jsxs("div", { className: "mt-4 grid grid-cols-2 gap-2", children: [_jsx("button", { className: "h-10 rounded-lg border border-gray-300 text-sm font-medium", onClick: () => setShowClose(false), children: "Back" }), _jsx("button", { className: "h-10 rounded-lg bg-primary text-sm font-medium text-white disabled:opacity-40", disabled: shiftBusy || !closeCash, onClick: closeShift, children: shiftBusy ? 'Closing…' : 'Close + Z-report' })] })] }) })), zReport && (_jsx("div", { role: "dialog", "aria-modal": "true", "aria-label": "Z-report", className: "fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center", children: _jsxs("div", { className: "w-full max-w-sm rounded-t-2xl bg-white p-6 sm:rounded-2xl", children: [_jsx("p", { className: "text-center font-bold", children: "Z-Report" }), _jsxs("p", { className: "text-center text-sm text-gray-500", children: [zReport.z_report?.sales_count ?? 0, " sales \u00B7 Revenue", ' ', formatPHP(zReport.z_report?.revenue ?? 0)] }), _jsx("hr", {}), (zReport.z_report?.by_method ?? []).map((m) => (_jsxs("p", { className: "flex justify-between py-1 text-sm", children: [_jsx("span", { className: "capitalize", children: m.method }), _jsx("span", { children: formatPHP(m.total) })] }, m.method))), _jsx("hr", {}), _jsxs("div", { className: "mt-2 space-y-1 text-sm", children: [(zReport.z_report?.vat_collected ?? 0) > 0 && (_jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "VAT collected" }), _jsx("span", { children: formatPHP(zReport.z_report?.vat_collected ?? 0) })] })), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Opening float" }), _jsx("span", { children: formatPHP(zReport.z_report?.opening_float ?? 0) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Cash tendered" }), _jsx("span", { children: formatPHP(zReport.z_report?.cash_tendered ?? 0) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Change given" }), _jsx("span", { children: formatPHP(zReport.z_report?.change_given ?? 0) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Expected cash" }), _jsx("span", { className: "font-bold", children: formatPHP(zReport.expected_cash ?? 0) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Counted cash" }), _jsx("span", { className: "font-bold", children: formatPHP(zReport.counted_cash ?? 0) })] }), _jsxs("p", { className: "flex justify-between", children: [_jsx("span", { children: "Variance" }), _jsx(Badge, { tone: Number(zReport.variance) === 0 ? 'green' : 'red', children: formatPHP(Number(zReport.variance) || 0) })] })] }), _jsx("button", { className: "mt-4 h-10 w-full rounded-lg bg-primary text-sm font-medium text-white", onClick: () => setZReport(null), children: "Done \u2014 open a new shift to continue" })] }) })), receipt &&
+                createPortal(_jsx("div", { id: "rcpt-portal", role: "dialog", "aria-modal": "true", "aria-label": `Receipt ${receipt.receipt_number}`, className: "fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/40 print:static print:block print:bg-transparent sm:items-center", children: _jsxs("div", { className: "receipt-80 w-full max-w-sm rounded-t-2xl bg-white p-6 sm:rounded-2xl print:max-w-none print:rounded-none print:p-0 print:shadow-none", children: [(() => {
+                                const at = receiptAt ?? new Date();
+                                const tax = Number(receipt.tax_amount ?? 0);
+                                const rate = Number(receipt.tax_rate ?? 0);
+                                // Image layout: Subtotal + VAT = TOTAL (VAT exclusive presentation).
+                                // VentaPOS is inclusive: show pre-tax base when tax carved out.
+                                const subtotal = receipt.subtotal != null
+                                    ? Number(receipt.subtotal)
+                                    : Math.round((receipt.total - tax) * 100) / 100;
+                                const addressLines = (storeInfo?.address ?? '')
+                                    .split(',')
+                                    .map((s) => s.trim())
+                                    .filter(Boolean);
+                                const qtyOf = (i) => i.unit_quantity ?? i.quantity ?? 0;
+                                const unitOf = (i) => i.unit_name ?? 'pc';
+                                return (_jsxs(_Fragment, { children: [_jsxs("div", { className: "flex justify-between text-[11px] leading-tight", children: [_jsxs("span", { children: [shortDate(at), ", ", shortTime(at)] }), _jsx("span", { children: receipt.receipt_number })] }), _jsxs("div", { className: "mt-2 text-center leading-tight", children: [_jsx("p", { className: "font-bold uppercase tracking-wide", children: storeInfo?.name ?? 'Store' }), addressLines.map((line, idx) => (_jsx("p", { className: "text-[11px]", children: line }, idx)))] }), _jsx("div", { className: "rcpt-sep" }), _jsxs("div", { className: "rcpt-row", children: [_jsx("span", { children: "Receipt #:" }), _jsx("span", { children: receipt.receipt_number })] }), _jsxs("div", { className: "rcpt-row", children: [_jsx("span", { children: "Date:" }), _jsx("span", { children: longDate(at) })] }), _jsxs("div", { className: "rcpt-row", children: [_jsx("span", { children: "Time:" }), _jsx("span", { children: longTime(at) })] }), _jsxs("div", { className: "rcpt-row", children: [_jsx("span", { children: "Cashier:" }), _jsx("span", { children: cashierName || '—' })] }), _jsx("div", { className: "rcpt-sep" }), receiptLines.length === 0 && (_jsx("p", { className: "py-1 text-center text-[11px] text-gray-500", children: "Loading items\u2026" })), receiptLines.map((i) => (_jsxs("div", { className: "mb-1", children: [_jsxs("div", { className: "rcpt-row", children: [_jsx("span", { className: "min-w-0 truncate pr-2", children: i.product_name_snapshot }), _jsx("span", { className: "shrink-0", children: formatPHP(i.line_total) })] }), _jsxs("div", { className: "pl-3 text-[11px]", children: [formatQty(Number(qtyOf(i))), " \u00D7", ' ', formatPHP(i.unit_price ?? 0), ' ', unitOf(i) !== 'pc' ? unitOf(i) : ''] })] }, i.id))), _jsx("div", { className: "rcpt-sep" }), _jsxs("div", { className: "rcpt-row", children: [_jsx("span", { children: "Subtotal:" }), _jsx("span", { children: formatPHP(subtotal) })] }), tax > 0 && (_jsxs("div", { className: "rcpt-row", children: [_jsxs("span", { children: ["VAT (Added ", rate || 12, "%):"] }), _jsx("span", { children: formatPHP(tax) })] })), (receipt.discount_amount ?? 0) > 0 && (_jsxs("div", { className: "rcpt-row", children: [_jsx("span", { children: "Discount:" }), _jsxs("span", { children: ["\u2212", formatPHP(receipt.discount_amount ?? 0)] })] })), _jsxs("div", { className: "rcpt-row font-bold", children: [_jsx("span", { children: "TOTAL:" }), _jsx("span", { children: formatPHP(receipt.total) })] }), _jsx("div", { className: "rcpt-sep" }), (receiptPays.length
+                                            ? receiptPays
+                                            : [{ payment_method: method, amount: receipt.paid }]).map((p, idx) => (_jsxs("div", { className: "rcpt-row", children: [_jsx("span", { children: idx === 0 ? 'Payment:' : '' }), _jsx("span", { className: "capitalize", children: p.payment_method ?? method })] }, idx))), _jsxs("div", { className: "rcpt-row", children: [_jsx("span", { children: "Cash:" }), _jsx("span", { children: formatPHP(receipt.paid ?? receipt.total) })] }), (receipt.change ?? 0) > 0 && (_jsxs("div", { className: "rcpt-row", children: [_jsx("span", { children: "Change:" }), _jsx("span", { children: formatPHP(receipt.change) })] })), (receipt.utang ?? 0) > 0 && (_jsxs("div", { className: "rcpt-row", children: [_jsx("span", { children: "Balance:" }), _jsx("span", { children: formatPHP(receipt.balance ?? 0) })] })), _jsx("div", { className: "rcpt-sep" }), _jsx("p", { className: "mt-1 text-center text-[11px]", children: "Thank you for your business!" }), _jsxs("p", { className: "mt-3 text-center text-[11px] leading-snug", children: ["Not valid for tax claim.", _jsx("br", {}), "For internal record only."] }), _jsxs("p", { className: "mt-3 text-center text-[10px] leading-snug text-gray-500", children: ["Powered by VentaPOS", _jsx("br", {}), "Multi-unit selling ready"] })] }));
+                            })(), _jsxs("div", { className: "mt-5 grid grid-cols-2 gap-2 print:hidden", children: [_jsx("button", { className: "h-10 rounded-lg border border-gray-300 text-sm font-medium", onClick: () => {
+                                            setReceipt(null);
+                                            setReceiptLines([]);
+                                            setReceiptAt(null);
+                                            setReceiptPays([]);
+                                        }, children: "New sale" }), _jsx("button", { className: "h-10 rounded-lg bg-primary text-sm font-medium text-white", onClick: () => window.print(), children: "Print" })] })] }) }), document.body)] }));
 }

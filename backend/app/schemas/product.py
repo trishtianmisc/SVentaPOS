@@ -77,6 +77,14 @@ class UnitCreate(BaseModel):
     barcode: str | None = Field(default=None, max_length=64)
 
 
+class UnitUpdate(BaseModel):
+    unit_name: str | None = Field(default=None, min_length=1, max_length=32)
+    conversion_factor: float | None = Field(default=None, gt=0)
+    selling_price: float | None = Field(default=None, ge=0)
+    cost_price: float | None = Field(default=None, ge=0)
+    barcode: str | None = Field(default=None, max_length=64)
+
+
 class UnitRead(BaseModel):
     id: UUID
     product_id: UUID

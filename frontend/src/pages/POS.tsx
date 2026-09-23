@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api-client';
@@ -6,6 +7,15 @@ import { qk } from '../lib/query-keys';
 import { formatPHP } from '../utils/currency';
 import { Badge, toast } from '../components/ui';
 import { useSessionStore } from '../stores/session';
+import {
+  baseEquivalent,
+  baseUnitName,
+  convertQtyBetween,
+  formatQty,
+  qtyStep,
+  roundQty,
+  unitFactor,
+} from '../lib/units';
 import {
   useCategories,
   useCustomers,
@@ -20,7 +30,7 @@ interface CartLine {
   product: Product;
   qty: number;
   discount: number;
-  /** Sell unit; 'pc' is the implicit base unit. Line qty is in this unit. */
+  /** Sell unit; base unit is implicit (today 'pc'). Line qty is in this unit. */
   unit: string;
 }
 interface Receipt {
@@ -32,6 +42,29 @@ interface Receipt {
   tax_amount?: number;
   tax_rate?: number;
   vatable_amount?: number;
+  subtotal?: number;
+  discount_amount?: number;
+  utang?: number;
+  balance?: number;
+  created_at?: string;
+}
+
+/** Thermal receipt helpers (screen + print share the same monospace look). */
+function shortDate(d: Date) {
+  return `${d.getMonth() + 1}/${d.getDate()}/${String(d.getFullYear()).slice(2)}`;
+}
+function longDate(d: Date) {
+  return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+}
+function shortTime(d: Date) {
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+function longTime(d: Date) {
+  return d.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
 }
 
 const METHODS = ['cash', 'gcash', 'maya', 'card', 'bank', 'other', 'utang'] as const;
@@ -66,25 +99,126 @@ function isWholesale(p: Product, qty: number) {
   return w != null && m != null && qty >= m;
 }
 
-/** Factor converting a line's sell unit to base units ('pc' = 1). */
-function lineFactor(l: CartLine, units: SellUnit[] | undefined) {
-  if (l.unit === 'pc') return 1;
-  return Number(units?.find((u) => u.unit_name === l.unit)?.conversion_factor ?? 1);
+/** Factor converting a line's sell unit to base units (base factor = 1). */
+function lineFactorFor(l: CartLine, units: SellUnit[] | undefined) {
+  const base = baseUnitName(l.product).toLowerCase();
+  if (l.unit.toLowerCase() === base) return 1;
+  return unitFactor(l.unit, units);
 }
 
 /** Client mirror of the server unit price (server stays authoritative):
  * explicit unit price wins, else tiered base price × factor. Tier triggers
  * on base-unit quantity. */
 function linePrice(l: CartLine, units: SellUnit[] | undefined) {
-  const f = lineFactor(l, units);
+  const f = lineFactorFor(l, units);
   const base = unitPrice(l.product, l.qty * f);
-  if (l.unit === 'pc') return base;
-  const sp = units?.find((u) => u.unit_name === l.unit)?.selling_price;
+  const baseName = baseUnitName(l.product).toLowerCase();
+  if (l.unit.toLowerCase() === baseName) return base;
+  const sp = units?.find(
+    (u) => u.unit_name.toLowerCase() === l.unit.toLowerCase(),
+  )?.selling_price;
   return sp != null ? Number(sp) : Math.round(base * f * 100) / 100;
 }
 
 function lineIsWholesale(l: CartLine, units: SellUnit[] | undefined) {
-  return isWholesale(l.product, l.qty * lineFactor(l, units));
+  return isWholesale(l.product, l.qty * lineFactorFor(l, units));
+}
+
+/**
+ * Editable cart quantity. Local draft so intermediate keystrokes
+ * ("" / "0." / "12.") never remove the line. Commit uses roundQty:
+ * measurement → 2 dp; count → snap near-integers only, keep real
+ * decimals (0.5 kg-as-pc, 1.5 pack from a unit switch).
+ */
+function CartQtyInput({
+  qty,
+  unit,
+  max,
+  name,
+  onSetQty,
+  onRemove,
+}: {
+  qty: number;
+  unit: string;
+  max: number;
+  name: string;
+  onSetQty: (n: number) => void;
+  onRemove: () => void;
+}) {
+  const [draft, setDraft] = useState(formatQty(qty));
+  const focused = useRef(false);
+
+  // Sync from cart when qty changes externally (±, unit switch) and we are idle.
+  useEffect(() => {
+    if (!focused.current) setDraft(formatQty(qty));
+  }, [qty, unit]);
+
+  const parse = (raw: string) => {
+    const cleaned = raw.replace(/[^0-9.]/g, '');
+    return cleaned;
+  };
+
+  const commit = () => {
+    const raw = draft.trim();
+    if (raw === '' || raw === '.') {
+      onRemove();
+      return;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) {
+      onRemove();
+      return;
+    }
+    // Do NOT Math.round count here — that turns typed 0.5 into 1.
+    // roundQty: kg/L → 2 dp; count → keep 0.5 / 1.5, snap 1.0000001 → 1.
+    const committed = roundQty(n, unit);
+    if (committed <= 0) {
+      onRemove();
+      return;
+    }
+    if (committed > max + 1e-9) {
+      setDraft(formatQty(qty));
+      onSetQty(committed); // setQty surfaces the stock message and rejects
+      return;
+    }
+    setDraft(formatQty(committed));
+    onSetQty(committed);
+  };
+
+  return (
+    <input
+      aria-label={`Quantity for ${name}`}
+      className="w-16 border-0 bg-transparent text-center text-sm font-bold focus:outline-none focus:ring-1 focus:ring-primary"
+      inputMode="decimal"
+      value={draft}
+      onFocus={() => {
+        focused.current = true;
+      }}
+      onChange={(e) => {
+        const raw = parse(e.target.value);
+        setDraft(raw);
+        // Live preview for valid positive numbers; never remove mid-typing.
+        if (raw === '' || raw === '.') return;
+        const n = Number(raw);
+        if (Number.isFinite(n) && n > 0) onSetQty(n);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          commit();
+          focused.current = false;
+          (e.target as HTMLInputElement).blur();
+        } else if (e.key === 'Escape') {
+          setDraft(formatQty(qty));
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+      onBlur={() => {
+        focused.current = false;
+        commit();
+      }}
+    />
+  );
 }
 
 export default function POSPage() {
@@ -163,6 +297,11 @@ export default function POSPage() {
   const storeId = useSessionStore((s) => s.storeId);
   // Store profile for the receipt header (name/address/TIN) + VAT flag.
   const [storeInfo, setStoreInfo] = useState<any>(null);
+  // Cashier display name for the printed receipt (from /auth/me).
+  const [cashierName, setCashierName] = useState('');
+  // Sale timestamp + payments captured once checkout succeeds.
+  const [receiptAt, setReceiptAt] = useState<Date | null>(null);
+  const [receiptPays, setReceiptPays] = useState<any[]>([]);
   useEffect(() => {
     api
       .get('/stores')
@@ -172,6 +311,12 @@ export default function POSPage() {
       })
       .catch(() => undefined);
   }, [storeId, storeVersion]);
+  useEffect(() => {
+    api
+      .get('/auth/me')
+      .then((r) => setCashierName(r.data.data?.full_name ?? ''))
+      .catch(() => undefined);
+  }, []);
   const count = cart.reduce((s, l) => s + l.qty, 0);
   useEffect(() => {
     localStorage.setItem('ventapos:cartCount', String(count));
@@ -192,6 +337,8 @@ export default function POSPage() {
       if (e.key === 'Escape') {
         setReceipt(null);
         setReceiptLines([]);
+        setReceiptAt(null);
+        setReceiptPays([]);
       }
     };
     document.addEventListener('keydown', onKey);
@@ -231,27 +378,75 @@ export default function POSPage() {
       const u = unit ?? line.unit;
       if (qty <= 0)
         return u === line.unit ? c.filter((l) => l.product.id !== id) : c;
-      const f =
-        u === 'pc'
-          ? 1
-          : Number(
-              unitsByProduct[id]?.find((x) => x.unit_name === u)
-                ?.conversion_factor ?? 1,
-            );
-      const max = line.product.track_inventory ? (stock[id]?.qty ?? 0) / f : Infinity;
-      if (qty > max) {
-        setMsg(`Only ${max} ${u} left in stock`);
+      const f = lineFactorFor({ ...line, unit: u }, unitsByProduct[id]);
+      const max = line.product.track_inventory
+        ? (stock[id]?.qty ?? 0) / f
+        : Infinity;
+      const rounded = roundQty(qty, u);
+      if (rounded > max + 1e-9) {
+        setMsg(`Only ${formatQty(max)} ${u} left in stock`);
         return c;
       }
-      return c.map((l) => (l.product.id === id ? { ...l, qty, unit: u } : l));
+      return c.map((l) =>
+        l.product.id === id ? { ...l, qty: rounded, unit: u } : l,
+      );
     });
+  };
+
+  /**
+   * Change selected unit while preserving base quantity:
+   *   base = qty * fromFactor; next = base / toFactor
+   * Never silent-rounds away stock accuracy (see roundQty).
+   */
+  const switchUnit = (id: string, nextUnit: string) => {
+    setCart((c) => {
+      const line = c.find((l) => l.product.id === id);
+      if (!line || line.unit === nextUnit) return c;
+      const units = unitsByProduct[id];
+      const newQty = convertQtyBetween(
+        line.qty,
+        line.unit,
+        nextUnit,
+        units,
+        baseUnitName(line.product),
+      );
+      if (newQty <= 0) return c;
+      const f = lineFactorFor({ ...line, unit: nextUnit }, units);
+      const max = line.product.track_inventory
+        ? (stock[id]?.qty ?? 0) / f
+        : Infinity;
+      if (newQty > max + 1e-9) {
+        setMsg(
+          `Only ${formatQty(max)} ${nextUnit} left in stock (base equivalent exceeded)`,
+        );
+        return c;
+      }
+      return c.map((l) =>
+        l.product.id === id ? { ...l, unit: nextUnit, qty: newQty } : l,
+      );
+    });
+  };
+
+  const bumpQty = (id: string, direction: 1 | -1) => {
+    const line = cart.find((l) => l.product.id === id);
+    if (!line) return;
+    const step = qtyStep(line.unit);
+    const next = roundQty(line.qty + direction * step, line.unit);
+    setQty(id, next);
   };
 
   const add = (p: Product) => {
     if (outOfStock(p)) return;
     const line = cart.find((l) => l.product.id === p.id);
-    setQty(p.id, line ? line.qty + 1 : 1);
-    if (!line) setCart((c) => [...c, { product: p, qty: 1, discount: 0, unit: 'pc' }]);
+    if (!line) {
+      setCart((c) => [
+        ...c,
+        { product: p, qty: 1, discount: 0, unit: baseUnitName(p) },
+      ]);
+      return;
+    }
+    const step = qtyStep(line.unit);
+    setQty(p.id, roundQty(line.qty + step, line.unit));
   };
 
   const clearCart = () => {
@@ -372,12 +567,18 @@ export default function POSPage() {
     setCharging(true);
     try {
       const res = await api.post('/sales', {
-        items: cart.map((l) => ({
-          product_id: l.product.id,
-          quantity: l.qty,
-          discount: l.discount,
-          ...(l.unit !== 'pc' ? { unit_name: l.unit } : {}),
-        })),
+        items: cart.map((l) => {
+          const base = baseUnitName(l.product);
+          return {
+            product_id: l.product.id,
+            quantity: l.qty,
+            discount: l.discount,
+            // Server still accepts omit for the implicit base unit name.
+            ...(l.unit.toLowerCase() !== base.toLowerCase()
+              ? { unit_name: l.unit }
+              : {}),
+          };
+        }),
         payments: [
           {
             method,
@@ -391,13 +592,27 @@ export default function POSPage() {
         limit_reason: reason || undefined,
       });
       setReceipt(res.data.data);
+      setReceiptAt(new Date());
+      setReceiptPays([
+        { payment_method: method, amount, reference: reference.trim() || null },
+      ]);
       setCart([]);
       setTendered('');
       setReference('');
-      // Line items for the printed receipt (best-effort; totals already shown).
+      // Line items + exact sale timestamp for the printed receipt.
       api
         .get(`/sales/${res.data.data.sale_id}`)
-        .then((d) => setReceiptLines(d.data.data.items ?? []))
+        .then((d) => {
+          const sale = d.data.data ?? {};
+          setReceiptLines(sale.items ?? []);
+          if (sale.created_at) setReceiptAt(new Date(sale.created_at));
+          if (Array.isArray(sale.payments) && sale.payments.length) {
+            setReceiptPays(sale.payments);
+          }
+          if (sale.receipt_number || sale.total != null) {
+            setReceipt((prev) => ({ ...(prev as Receipt), ...sale, paid: sale.paid ?? prev?.paid, change: sale.change ?? prev?.change }));
+          }
+        })
         .catch(() => setReceiptLines([]));
       // Stock and balances changed server-side: mark stale so the next
       // read refetches exactly once, instead of refetching everything here.
@@ -592,7 +807,7 @@ export default function POSPage() {
                     </button>
                     {line ? (
                       <span className="mt-2 inline-flex items-center rounded-full bg-primary px-1 py-0.5 text-white">
-                        <button aria-label={`Decrease ${p.name}`} className="px-2 py-0.5" onClick={() => setQty(p.id, line.qty - 1)}>
+                        <button aria-label={`Decrease ${p.name}`} className="px-2 py-0.5" onClick={() => bumpQty(p.id, -1)}>
                           −
                         </button>
                         <span className="min-w-6 text-center text-sm font-bold">{line.qty}</span>
@@ -637,7 +852,7 @@ export default function POSPage() {
                     </button>
                     {line ? (
                       <span className="inline-flex items-center">
-                        <button aria-label={`Decrease ${p.name}`} className="rounded px-2 py-1 hover:bg-gray-100" onClick={() => setQty(p.id, line.qty - 1)}>
+                        <button aria-label={`Decrease ${p.name}`} className="rounded px-2 py-1 hover:bg-gray-100" onClick={() => bumpQty(p.id, -1)}>
                           −
                         </button>
                         <span className="w-8 text-center text-sm font-bold">{line.qty}</span>
@@ -669,9 +884,9 @@ export default function POSPage() {
         {/* Current order */}
         <section
           aria-label="Current order"
-          className="h-fit rounded-xl border border-gray-200 bg-white lg:sticky lg:top-4"
+          className="h-fit rounded-xl border border-gray-20 bg-white lg:sticky lg:top-4"
         >
-          <div className="flex items-center justify-between border-b border-gray-100 p-4">
+          <div className="flex items-center justify-between border-b border-gray-100 p-4 ">
             <h2 className="text-base font-semibold">
               Current Order{' '}
               {count > 0 && (
@@ -714,7 +929,9 @@ export default function POSPage() {
                 const price = linePrice(l, units);
                 const gross = price * l.qty;
                 const ws = lineIsWholesale(l, units);
-                const f = lineFactor(l, units);
+                const f = lineFactorFor(l, units);
+                const baseName = baseUnitName(l.product);
+                const baseQty = baseEquivalent(l.qty, l.unit, units, baseName);
                 const max = l.product.track_inventory
                   ? (stock[l.product.id]?.qty ?? 0) / f
                   : Infinity;
@@ -731,6 +948,11 @@ export default function POSPage() {
                             </span>
                           )}
                         </p>
+                        {f !== 1 || l.unit.toLowerCase() !== baseName.toLowerCase() ? (
+                          <p className="text-[11px] text-gray-400">
+                            ≈ {formatQty(baseQty)} {baseName}
+                          </p>
+                        ) : null}
                       </div>
                       <p className="text-sm font-semibold">
                         {formatPHP(gross - Math.min(l.discount, gross))}
@@ -739,14 +961,29 @@ export default function POSPage() {
                     <div className="mt-1 flex items-center justify-between">
                       <span className="inline-flex items-center gap-1">
                         <span className="inline-flex items-center rounded-full border border-gray-200">
-                          <button aria-label={`Decrease ${l.product.name}`} className="px-2.5 py-1" onClick={() => setQty(l.product.id, l.qty - 1)}>
+                          <button
+                            aria-label={`Decrease ${l.product.name}`}
+                            className="px-2.5 py-1"
+                            onClick={() => bumpQty(l.product.id, -1)}
+                          >
                             −
                           </button>
-                          <span className="min-w-10 text-center text-sm font-bold">
-                            {l.qty}
-                            <span className="font-normal text-gray-400"> {l.unit}</span>
+                            <CartQtyInput
+                              qty={l.qty}
+                              unit={l.unit}
+                              max={max}
+                              name={l.product.name}
+                              onSetQty={(n) => setQty(l.product.id, n)}
+                              onRemove={() => setQty(l.product.id, 0)}
+                            />
+                          <span className="pr-1 text-sm font-normal text-gray-400">
+                            {l.unit}
                           </span>
-                          <button aria-label={`Increase ${l.product.name}`} className="px-2.5 py-1" onClick={() => add(l.product)}>
+                          <button
+                            aria-label={`Increase ${l.product.name}`}
+                            className="px-2.5 py-1"
+                            onClick={() => bumpQty(l.product.id, 1)}
+                          >
                             +
                           </button>
                         </span>
@@ -755,9 +992,9 @@ export default function POSPage() {
                             aria-label={`Unit for ${l.product.name}`}
                             className="h-8 rounded-lg border border-gray-200 bg-white px-1 text-xs"
                             value={l.unit}
-                            onChange={(e) => setQty(l.product.id, l.qty, e.target.value)}
+                            onChange={(e) => switchUnit(l.product.id, e.target.value)}
                           >
-                            <option value="pc">pc</option>
+                            <option value={baseName}>{baseName}</option>
                             {units.map((u) => (
                               <option key={u.id} value={u.unit_name}>
                                 {u.unit_name}
@@ -811,11 +1048,18 @@ export default function POSPage() {
                       )}
                     </div>
                     {l.qty >= max && max !== Infinity && (
-                      <p className="mt-1 text-xs text-amber-700">Only {max} {l.unit} in stock</p>
+                      <p className="mt-1 text-xs text-amber-700">
+                        Only {formatQty(max)} {l.unit} in stock
+                      </p>
                     )}
                   </li>
                 );
               })}
+              {cart.length > 0 && (
+                <li className="py-2 text-center text-[11px] text-gray-400">
+                  Inventory is deducted in base units.
+                </li>
+              )}
               {cart.length === 0 && (
                 <li className="py-4 text-center text-sm text-gray-400">
                   Tap a product to start an order.
@@ -1065,89 +1309,183 @@ export default function POSPage() {
         </div>
       )}
 
-      {/* Receipt modal */}
-      {receipt && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label={`Receipt ${receipt.receipt_number}`}
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 print:static print:block print:bg-white sm:items-center"
-        >
-          <div className="receipt-80 w-full max-w-sm rounded-t-2xl bg-white p-6 sm:rounded-2xl print:max-w-none print:rounded-none print:p-0 print:shadow-none">
-            <p className="text-center font-bold">VentaPOS</p>
-            <p className="text-center">{receipt.receipt_number}</p>
-            {storeInfo && (
-              <p className="text-center text-gray-500">
-                {storeInfo.name}
-                {storeInfo.address ? ` · ${storeInfo.address}` : ''}
-                {storeInfo.tin ? ` · TIN ${storeInfo.tin}` : ''}
-              </p>
-            )}
-            <p className="text-center text-gray-500">
-              {new Date().toLocaleString()} · {method.toUpperCase()}
-            </p>
-            <hr />
-            {receiptLines.map((i: any) => (
-              <p key={i.id} className="flex justify-between">
-                <span>
-                  {i.product_name_snapshot} × {i.unit_quantity ?? i.quantity}{' '}
-                  {i.unit_name ?? 'pc'}
-                </span>
-                <span>{formatPHP(i.line_total)}</span>
-              </p>
-            ))}
-            <hr />
-            <div className="mt-4 space-y-1 text-sm print:mt-0">
-              {(receipt.tax_amount ?? 0) > 0 && (
+      {/* Receipt modal — thermal monospace layout (portal: print isolates to body) */}
+      {receipt &&
+        createPortal(
+          <div
+            id="rcpt-portal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Receipt ${receipt.receipt_number}`}
+            className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/40 print:static print:block print:bg-transparent sm:items-center"
+          >
+            <div className="receipt-80 w-full max-w-sm rounded-t-2xl bg-white p-6 sm:rounded-2xl print:max-w-none print:rounded-none print:p-0 print:shadow-none">
+            {(() => {
+              const at = receiptAt ?? new Date();
+              const tax = Number(receipt.tax_amount ?? 0);
+              const rate = Number(receipt.tax_rate ?? 0);
+              // Image layout: Subtotal + VAT = TOTAL (VAT exclusive presentation).
+              // VentaPOS is inclusive: show pre-tax base when tax carved out.
+              const subtotal =
+                receipt.subtotal != null
+                  ? Number(receipt.subtotal)
+                  : Math.round((receipt.total - tax) * 100) / 100;
+              const addressLines = (storeInfo?.address ?? '')
+                .split(',')
+                .map((s: string) => s.trim())
+                .filter(Boolean);
+              const qtyOf = (i: any) =>
+                i.unit_quantity ?? i.quantity ?? 0;
+              const unitOf = (i: any) => i.unit_name ?? 'pc';
+              return (
                 <>
-                  <p className="flex justify-between text-gray-500">
-                    <span>VATABLE SALES</span>
+                  {/* Header: short date/time left, short receipt # right */}
+                  <div className="flex justify-between text-[11px] leading-tight">
                     <span>
-                      {formatPHP(
-                        Math.round(((receipt.vatable_amount ?? 0) - (receipt.tax_amount ?? 0)) * 100) / 100,
-                      )}
+                      {shortDate(at)}, {shortTime(at)}
                     </span>
+                    <span>{receipt.receipt_number}</span>
+                  </div>
+
+                  {/* Store */}
+                  <div className="mt-2 text-center leading-tight">
+                    <p className="font-bold uppercase tracking-wide">
+                      {storeInfo?.name ?? 'Store'}
+                    </p>
+                    {addressLines.map((line: string, idx: number) => (
+                      <p key={idx} className="text-[11px]">
+                        {line}
+                      </p>
+                    ))}
+                  </div>
+
+                  <div className="rcpt-sep" />
+
+                  {/* Meta rows */}
+                  <div className="rcpt-row">
+                    <span>Receipt #:</span>
+                    <span>{receipt.receipt_number}</span>
+                  </div>
+                  <div className="rcpt-row">
+                    <span>Date:</span>
+                    <span>{longDate(at)}</span>
+                  </div>
+                  <div className="rcpt-row">
+                    <span>Time:</span>
+                    <span>{longTime(at)}</span>
+                  </div>
+                  <div className="rcpt-row">
+                    <span>Cashier:</span>
+                    <span>{cashierName || '—'}</span>
+                  </div>
+
+                  <div className="rcpt-sep" />
+
+                  {/* Line items */}
+                  {receiptLines.length === 0 && (
+                    <p className="py-1 text-center text-[11px] text-gray-500">
+                      Loading items…
+                    </p>
+                  )}
+                  {receiptLines.map((i: any) => (
+                    <div key={i.id} className="mb-1">
+                      <div className="rcpt-row">
+                        <span className="min-w-0 truncate pr-2">
+                          {i.product_name_snapshot}
+                        </span>
+                        <span className="shrink-0">{formatPHP(i.line_total)}</span>
+                      </div>
+                      <div className="pl-3 text-[11px]">
+                        {formatQty(Number(qtyOf(i)))} ×{' '}
+                        {formatPHP(i.unit_price ?? 0)}{' '}
+                        {unitOf(i) !== 'pc' ? unitOf(i) : ''}
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="rcpt-sep" />
+
+                  {/* Totals */}
+                  <div className="rcpt-row">
+                    <span>Subtotal:</span>
+                    <span>{formatPHP(subtotal)}</span>
+                  </div>
+                  {tax > 0 && (
+                    <div className="rcpt-row">
+                      <span>VAT (Added {rate || 12}%):</span>
+                      <span>{formatPHP(tax)}</span>
+                    </div>
+                  )}
+                  {(receipt.discount_amount ?? 0) > 0 && (
+                    <div className="rcpt-row">
+                      <span>Discount:</span>
+                      <span>−{formatPHP(receipt.discount_amount ?? 0)}</span>
+                    </div>
+                  )}
+                  <div className="rcpt-row font-bold">
+                    <span>TOTAL:</span>
+                    <span>{formatPHP(receipt.total)}</span>
+                  </div>
+
+                  <div className="rcpt-sep" />
+
+                  {/* Payment */}
+                  {(receiptPays.length
+                    ? receiptPays
+                    : [{ payment_method: method, amount: receipt.paid }]
+                  ).map((p: any, idx: number) => (
+                    <div key={idx} className="rcpt-row">
+                      <span>{idx === 0 ? 'Payment:' : ''}</span>
+                      <span className="capitalize">
+                        {p.payment_method ?? method}
+                      </span>
+                    </div>
+                  ))}
+                  <div className="rcpt-row">
+                    <span>Cash:</span>
+                    <span>{formatPHP(receipt.paid ?? receipt.total)}</span>
+                  </div>
+                  {(receipt.change ?? 0) > 0 && (
+                    <div className="rcpt-row">
+                      <span>Change:</span>
+                      <span>{formatPHP(receipt.change)}</span>
+                    </div>
+                  )}
+                  {(receipt.utang ?? 0) > 0 && (
+                    <div className="rcpt-row">
+                      <span>Balance:</span>
+                      <span>{formatPHP(receipt.balance ?? 0)}</span>
+                    </div>
+                  )}
+
+                  <div className="rcpt-sep" />
+
+                  {/* Footer */}
+                  <p className="mt-1 text-center text-[11px]">
+                    Thank you for your business!
                   </p>
-                  <p className="flex justify-between text-gray-500">
-                    <span>VAT ({receipt.tax_rate ?? 12}%)</span>
-                    <span>{formatPHP(receipt.tax_amount ?? 0)}</span>
+                  <p className="mt-3 text-center text-[11px] leading-snug">
+                    Not valid for tax claim.
+                    <br />
+                    For internal record only.
                   </p>
-                  <p className="flex justify-between text-gray-500">
-                    <span>VAT EXEMPT</span>
-                    <span>
-                      {formatPHP(
-                        Math.round((receipt.total - (receipt.vatable_amount ?? 0)) * 100) / 100,
-                      )}
-                    </span>
+                  <p className="mt-3 text-center text-[10px] leading-snug text-gray-500">
+                    Powered by VentaPOS
+                    <br />
+                    Multi-unit selling ready
                   </p>
                 </>
-              )}
-              <p className="flex justify-between">
-                <span>Total</span>
-                <span className="font-bold">{formatPHP(receipt.total)}</span>
-              </p>
-              <p className="flex justify-between">
-                <span>Paid ({method})</span>
-                <span>{formatPHP(receipt.paid)}</span>
-              </p>
-              <p className="flex justify-between">
-                <span>Change</span>
-                <span className="font-bold">{formatPHP(receipt.change)}</span>
-              </p>
-              {(receipt as any).utang > 0 && (
-                <p className="flex justify-between">
-                  <span>New balance</span>
-                  <span className="font-bold">{formatPHP((receipt as any).balance ?? 0)}</span>
-                </p>
-              )}
-            </div>
-            <p className="mt-2 hidden text-center print:block">Thank you for shopping!</p>
+              );
+            })()}
+
             <div className="mt-5 grid grid-cols-2 gap-2 print:hidden">
               <button
                 className="h-10 rounded-lg border border-gray-300 text-sm font-medium"
                 onClick={() => {
                   setReceipt(null);
                   setReceiptLines([]);
+                  setReceiptAt(null);
+                  setReceiptPays([]);
                 }}
               >
                 New sale
@@ -1160,8 +1498,9 @@ export default function POSPage() {
               </button>
             </div>
           </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

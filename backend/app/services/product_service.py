@@ -154,3 +154,56 @@ def delete_unit(org_id: str, product_id: str, unit_id: str) -> None:
            .eq("id", unit_id).eq("product_id", product_id).execute())
     if not (res.data or []):
         raise NotFoundError("Unit not found")
+
+
+def update_unit(org_id: str, product_id: str, unit_id: str, patch: dict) -> dict:
+    get_product(org_id, product_id)  # validates tenancy
+    allowed = (
+        "unit_name", "conversion_factor", "selling_price",
+        "cost_price", "barcode",
+    )
+    clean = {k: v for k, v in patch.items() if k in allowed}
+    if "unit_name" in clean:
+        name = (clean["unit_name"] or "").strip()
+        if not name:
+            from app.core.exceptions import ValidationAppError
+
+            raise ValidationAppError("Unit name required")
+        if name.lower() == "pc":
+            from app.core.exceptions import ValidationAppError
+
+            raise ValidationAppError("'pc' is the implicit base unit")
+        clean["unit_name"] = name
+    if "barcode" in clean and clean["barcode"] == "":
+        clean["barcode"] = None
+    if "conversion_factor" in clean:
+        cf = clean["conversion_factor"]
+        if cf is None or cf <= 0:
+            from app.core.exceptions import ValidationAppError
+
+            raise ValidationAppError("Conversion factor must be greater than 0")
+    if "selling_price" in clean and clean["selling_price"] is not None:
+        if clean["selling_price"] < 0:
+            from app.core.exceptions import ValidationAppError
+
+            raise ValidationAppError("Selling price cannot be negative")
+    if not clean:
+        raise NotFoundError("Unit not found")
+    sb = _sb()
+    try:
+        res = (
+            sb.table("product_units")
+            .update(clean)
+            .eq("id", unit_id)
+            .eq("product_id", product_id)
+            .execute()
+        )
+    except Exception as e:
+        msg = str(e).lower()
+        if "duplicate" in msg or "unique" in msg:
+            raise ConflictError("Unit already exists for this product")
+        raise
+    rows = res.data or []
+    if not rows:
+        raise NotFoundError("Unit not found")
+    return rows[0]

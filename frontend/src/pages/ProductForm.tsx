@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api-client';
 import { qk } from '../lib/query-keys';
-import { useCategories, useProducts } from '../hooks/useCatalog';
+import { baseUnitName, validateUnitDraft } from '../lib/units';
+import { useCategories, useProducts, useProductUnits } from '../hooks/useCatalog';
+import SellUnitsEditor, { type UnitDraft } from '../components/SellUnitsEditor';
 import {
   Button,
   Field,
@@ -55,23 +57,64 @@ function num(v: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/** Validate all unit drafts; keys match SellUnitsEditor draft keys. */
+function validateUnits(units: UnitDraft[]): Record<string, string> {
+  const errors: Record<string, string> = {};
+  const names = units.map((u) => u.unit_name.trim()).filter(Boolean);
+  const seen = new Set<string>();
+  units.forEach((u, i) => {
+    const key = u.id ?? `new-${i}`;
+    const err = validateUnitDraft(
+      {
+        unit_name: u.unit_name,
+        conversion_factor: u.conversion_factor,
+        selling_price: u.selling_price,
+      },
+      [],
+      u.id,
+    );
+    if (err) {
+      errors[key] = err;
+      return;
+    }
+    const lower = u.unit_name.trim().toLowerCase();
+    if (seen.has(lower)) {
+      errors[key] = `Duplicate unit name "${u.unit_name.trim()}".`;
+      return;
+    }
+    seen.add(lower);
+  });
+  // Cross-row duplicates already covered by `seen` when names non-empty.
+  void names;
+  return errors;
+}
+
 export default function ProductFormPage() {
   const { productId } = useParams<{ productId: string }>();
+  /** Set after create so sell units can be saved against the new product. */
+  const [createdId, setCreatedId] = useState<string | null>(null);
+  const activeId = productId ?? createdId;
   const isEdit = !!productId;
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { data: categories = [], isPending: catsPending } = useCategories();
   const { data: products = [], isPending: productsPending } = useProducts();
+  const unitsQ = useProductUnits(isEdit ? productId : createdId ?? undefined);
 
   const [form, setForm] = useState<FormState>(empty);
+  const [unitDrafts, setUnitDrafts] = useState<UnitDraft[]>([]);
+  const [unitErrors, setUnitErrors] = useState<Record<string, string>>({});
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(!isEdit);
+  const unitsHydrated = useRef(false);
 
   const existing = useMemo(
     () => (isEdit ? products.find((p) => p.id === productId) : undefined),
     [isEdit, products, productId],
   );
+
+  const productBase = baseUnitName(existing);
 
   useEffect(() => {
     if (!isEdit) {
@@ -108,11 +151,103 @@ export default function ProductFormPage() {
     setLoaded(true);
   }, [isEdit, existing, productsPending]);
 
+  // Hydrate unit drafts once from the server (edit or post-create retry).
+  useEffect(() => {
+    if (!activeId || unitsHydrated.current) return;
+    if (unitsQ.isPending) return;
+    const rows = unitsQ.data ?? [];
+    setUnitDrafts(
+      rows.map((u) => ({
+        id: u.id,
+        unit_name: u.unit_name,
+        conversion_factor: String(u.conversion_factor),
+        selling_price: u.selling_price != null ? String(u.selling_price) : '',
+        barcode: u.barcode ?? '',
+      })),
+    );
+    unitsHydrated.current = true;
+  }, [activeId, unitsQ.isPending, unitsQ.data]);
+
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
+  /**
+   * Create/update/delete unit rows after the product itself is saved.
+   * Returns human-readable failures; empty array = full success.
+   */
+  const saveUnits = async (pid: string): Promise<string[]> => {
+    const prior = unitsQ.data ?? [];
+    const keepIds = new Set(
+      unitDrafts.map((u) => u.id).filter(Boolean) as string[],
+    );
+    const failures: string[] = [];
+
+    // 1) Remove units the user deleted (never touch unknown rows).
+    for (const old of prior) {
+      if (keepIds.has(old.id)) continue;
+      try {
+        await api.delete(`/products/${pid}/units/${old.id}`);
+      } catch (e: any) {
+        failures.push(
+          `remove "${old.unit_name}": ${
+            e.response?.data?.error?.message ?? 'failed'
+          }`,
+        );
+      }
+    }
+
+    // 2) Create new / update existing (never bulk-delete then reinsert).
+    for (let i = 0; i < unitDrafts.length; i++) {
+      const u = unitDrafts[i];
+      const name = u.unit_name.trim();
+      const factor = Number(u.conversion_factor);
+      const sp =
+        u.selling_price.trim() === '' ? undefined : Number(u.selling_price);
+      try {
+        if (u.id) {
+          await api.put(`/products/${pid}/units/${u.id}`, {
+            unit_name: name,
+            conversion_factor: factor,
+            selling_price: sp === undefined ? null : sp,
+            barcode: u.barcode.trim() || null,
+          });
+        } else {
+          const res = await api.post(`/products/${pid}/units`, {
+            unit_name: name,
+            conversion_factor: factor,
+            selling_price: sp,
+            barcode: u.barcode.trim() || null,
+          });
+          const created = res.data.data;
+          if (created?.id) {
+            setUnitDrafts((rows) =>
+              rows.map((r, j) =>
+                j === i ? { ...r, id: created.id } : r,
+              ),
+            );
+          }
+        }
+      } catch (e: any) {
+        failures.push(
+          `"${name || `unit ${i + 1}`}": ${
+            e.response?.data?.error?.message ?? 'failed'
+          }`,
+        );
+      }
+    }
+
+    if (failures.length === 0) {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: qk.productUnits }),
+        qc.invalidateQueries({ queryKey: qk.units }),
+      ]);
+    }
+    return failures;
+  };
+
   const submit = async () => {
     setMsg('');
+    setUnitErrors({});
     if (!form.name.trim()) {
       setMsg('Product name is required.');
       return;
@@ -125,6 +260,13 @@ export default function ProductFormPage() {
     const cost = num(form.cost_price) ?? 0;
     if (cost < 0) {
       setMsg('Cost price cannot be negative.');
+      return;
+    }
+
+    const uErrs = validateUnits(unitDrafts);
+    if (Object.keys(uErrs).length > 0) {
+      setUnitErrors(uErrs);
+      setMsg('Fix sell unit errors before saving.');
       return;
     }
 
@@ -146,16 +288,45 @@ export default function ProductFormPage() {
     };
 
     setBusy(true);
+    let pid = activeId;
     try {
+      // 1) Create or update the product row first.
       if (isEdit) {
         await api.put(`/products/${productId}`, body);
-        toast('success', 'Product updated');
+        pid = productId!;
       } else {
-        await api.post('/products', body);
-        toast('success', 'Product created');
+        const res = await api.post('/products', body);
+        pid = res.data.data?.id ?? null;
+        if (pid) setCreatedId(pid);
       }
+
       qc.invalidateQueries({ queryKey: qk.products });
       qc.invalidateQueries({ queryKey: qk.categories });
+
+      if (!pid) {
+        if (unitDrafts.length > 0) {
+          setMsg(
+            'Product saved, but sell units could not be attached (missing product id). Retry Save.',
+          );
+        } else {
+          toast('success', 'Product created');
+          navigate('/products', { replace: true });
+        }
+        return;
+      }
+
+      // 2) Persist unit configuration; never report success if this fails.
+      if (unitDrafts.length > 0 || (isEdit && (unitsQ.data ?? []).length > 0)) {
+        const failures = await saveUnits(pid);
+        if (failures.length > 0) {
+          setMsg(
+            `Product saved, but sell units failed — ${failures.length} issue(s): ${failures.join('; ')}`,
+          );
+          return;
+        }
+      }
+
+      toast('success', isEdit ? 'Product updated' : 'Product created');
       navigate('/products', { replace: true });
     } catch (e: any) {
       setMsg(e.response?.data?.error?.message ?? 'Save failed');
@@ -183,14 +354,32 @@ export default function ProductFormPage() {
     );
   }
 
+  const submitLabel = busy
+    ? 'Saving…'
+    : createdId && !isEdit
+      ? 'Save sell units'
+      : isEdit
+        ? 'Save changes'
+        : unitDrafts.length > 0
+          ? 'Create product & units'
+          : 'Create product';
+
   return (
     <div className="w-full p-4 md:p-6">
       <PageHeader
-        title={isEdit ? 'Edit product' : 'Add product'}
+        title={
+          isEdit
+            ? 'Edit product'
+            : createdId
+              ? 'Finish sell units'
+              : 'Add product'
+        }
         sub={
           isEdit
-            ? 'Update catalog details, pricing, and stock thresholds'
-            : 'Create a catalog item with pricing and inventory settings'
+            ? 'Update catalog details, pricing, inventory, and sell units'
+            : createdId
+              ? 'Product saved — review sell units, then save again'
+              : 'Create a catalog item with pricing, inventory, and sell units'
         }
         actions={
           <Button variant="secondary" onClick={() => navigate('/products')}>
@@ -296,7 +485,10 @@ export default function ProductFormPage() {
                   placeholder="—"
                 />
               </Field>
-              <Field label="Wholesale min qty" hint="Minimum units for wholesale.">
+              <Field
+                label="Wholesale min qty"
+                hint="Compared against base-unit quantity."
+              >
                 <TextInput
                   value={form.wholesale_min_qty}
                   onChange={(e) => set('wholesale_min_qty', e.target.value)}
@@ -319,14 +511,14 @@ export default function ProductFormPage() {
         <Section title="Inventory">
           <div className="grid gap-3">
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Minimum stock" hint="Alert when quantity falls to this level.">
+              <Field label="Minimum stock" hint="In base units.">
                 <TextInput
                   value={form.minimum_stock}
                   onChange={(e) => set('minimum_stock', e.target.value)}
                   inputMode="decimal"
                 />
               </Field>
-              <Field label="Reorder level" hint="Suggested restock threshold.">
+              <Field label="Reorder level" hint="In base units.">
                 <TextInput
                   value={form.reorder_level}
                   onChange={(e) => set('reorder_level', e.target.value)}
@@ -343,8 +535,8 @@ export default function ProductFormPage() {
               Track inventory (stock movements for this product)
             </label>
             <p className="text-xs text-gray-400">
-              Opening stock is adjusted from the Stock page after the product
-              is created.
+              Opening stock is adjusted from the Stock page. Inventory is
+              deducted in base units.
             </p>
           </div>
         </Section>
@@ -362,11 +554,19 @@ export default function ProductFormPage() {
                     alt=""
                     className="h-full w-full object-cover"
                     onError={(e) => {
-                      (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
+                      (e.currentTarget as HTMLImageElement).style.visibility =
+                        'hidden';
                     }}
                   />
                 ) : (
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <svg
+                    width="22"
+                    height="22"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                  >
                     <path d="M5 7h14l-1.4 13H6.4L5 7Z" />
                     <path d="M9 7V6a3 3 0 0 1 6 0v1" />
                   </svg>
@@ -406,16 +606,46 @@ export default function ProductFormPage() {
                 <dd>{form.vat_exempt ? 'Exempt' : 'Standard'}</dd>
               </div>
             </dl>
+            {unitDrafts.length > 0 && (
+              <p className="mt-2 text-xs text-gray-500">
+                Sell units:{' '}
+                {unitDrafts
+                  .map(
+                    (u) =>
+                      `1 ${u.unit_name.trim() || '?'} = ${u.conversion_factor} ${productBase}`,
+                  )
+                  .join(' · ')}
+              </p>
+            )}
           </div>
         </Section>
+
+        <div className="lg:col-span-2">
+          <Section title="Sell units">
+            <SellUnitsEditor
+              units={unitDrafts}
+              onChange={(next) => {
+                setUnitDrafts(next);
+                setUnitErrors({});
+              }}
+              baseUnit={productBase}
+              disabled={busy}
+              errors={unitErrors}
+            />
+          </Section>
+        </div>
       </div>
 
       <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
-        <Button variant="secondary" onClick={() => navigate('/products')} disabled={busy}>
+        <Button
+          variant="secondary"
+          onClick={() => navigate('/products')}
+          disabled={busy}
+        >
           Cancel
         </Button>
         <Button onClick={submit} disabled={busy}>
-          {busy ? 'Saving…' : isEdit ? 'Save changes' : 'Create product'}
+          {submitLabel}
         </Button>
       </div>
     </div>

@@ -7,13 +7,14 @@ from app.api.v1.dependencies import (
     CurrentUser,
     get_current_organization,
     get_current_user,
+    require_feature,
     require_org_role,
 )
 from app.schemas.common import SuccessResponse
 from app.schemas.transfer import TransferCreate, TransferRead
 from app.services import transfer_service
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_feature("transfers"))])
 MGR = ["owner", "manager"]
 MOVE_ROLES = ["owner", "manager", "inventory"]
 

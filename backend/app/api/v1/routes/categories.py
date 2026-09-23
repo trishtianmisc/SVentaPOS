@@ -7,6 +7,7 @@ from app.api.v1.dependencies import (
     CurrentUser,
     get_current_organization,
     get_current_user,
+    require_feature,
     require_org_role,
 )
 from app.schemas.category import (
@@ -18,9 +19,15 @@ from app.schemas.common import SuccessResponse
 from app.services import category_service
 
 router = APIRouter()
+_CAT_READ = [Depends(require_feature("pos", "inventory"))]
+_CAT_WRITE = [
+    Depends(require_org_role("owner", "manager")),
+    Depends(require_feature("inventory")),
+]
 
 
-@router.get("", response_model=SuccessResponse[list[CategoryRead]])
+@router.get("", response_model=SuccessResponse[list[CategoryRead]],
+            dependencies=_CAT_READ)
 def list_categories(
     org_id: UUID = Depends(get_current_organization),
     _=Depends(get_current_user),
@@ -29,7 +36,7 @@ def list_categories(
 
 
 @router.post("", response_model=SuccessResponse[CategoryRead], status_code=201,
-             dependencies=[Depends(require_org_role("owner", "manager"))])
+             dependencies=_CAT_WRITE)
 def create_category(
     body: CategoryCreate,
     org_id: UUID = Depends(get_current_organization),
@@ -41,7 +48,7 @@ def create_category(
 
 
 @router.put("/{category_id}", response_model=SuccessResponse[CategoryRead],
-            dependencies=[Depends(require_org_role("owner", "manager"))])
+            dependencies=_CAT_WRITE)
 def update_category(
     category_id: UUID,
     body: CategoryUpdate,
@@ -52,7 +59,7 @@ def update_category(
 
 
 @router.delete("/{category_id}", response_model=SuccessResponse[CategoryRead],
-               dependencies=[Depends(require_org_role("owner", "manager"))])
+               dependencies=_CAT_WRITE)
 def delete_category(
     category_id: UUID,
     org_id: UUID = Depends(get_current_organization),

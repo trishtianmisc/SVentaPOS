@@ -69,6 +69,19 @@ export function useUnits() {
         enabled: !!userId,
     });
 }
+/**
+ * Sell units for a single product (product form / edit).
+ * Separate cache key from the org-wide useUnits list used by POS.
+ */
+export function useProductUnits(productId) {
+    const userId = useAuthStore((s) => s.userId);
+    return useQuery({
+        queryKey: [...qk.productUnits, productId ?? 'none', userId ?? 'anon'],
+        queryFn: () => list(`/products/${productId}/units`),
+        enabled: !!productId && !!userId,
+        staleTime: 5 * 60000,
+    });
+}
 /** Call after any mutation that changes stock (sale, adjust, PO receive). */
 export function useInvalidateInventory() {
     const qc = useQueryClient();

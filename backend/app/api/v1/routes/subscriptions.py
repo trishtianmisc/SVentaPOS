@@ -7,6 +7,7 @@ from app.api.v1.dependencies import (
     CurrentUser,
     get_current_organization,
     get_current_user,
+    require_feature,
     require_org_role,
 )
 from app.schemas.common import SuccessResponse
@@ -44,7 +45,10 @@ def usage(
 
 @router.post("/request-upgrade",
              response_model=SuccessResponse[dict],
-             dependencies=[Depends(require_org_role("owner", "manager"))])
+             dependencies=[
+                 Depends(require_org_role("owner", "manager")),
+                 Depends(require_feature("billing")),
+             ])
 def request_upgrade(
     body: UpgradeRequestBody,
     org_id: UUID = Depends(get_current_organization),
@@ -61,7 +65,10 @@ def request_upgrade(
 
 
 @router.post("/downgrade", response_model=SuccessResponse[SubscriptionRead],
-             dependencies=[Depends(require_org_role("owner", "manager"))])
+             dependencies=[
+                 Depends(require_org_role("owner", "manager")),
+                 Depends(require_feature("billing")),
+             ])
 def downgrade(
     org_id: UUID = Depends(get_current_organization),
     user: CurrentUser = Depends(get_current_user),

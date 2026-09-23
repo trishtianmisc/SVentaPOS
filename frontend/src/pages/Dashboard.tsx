@@ -15,6 +15,7 @@ const CARDS = [
   { to: '/transfers', title: 'Transfers', desc: 'Move stock between stores' },
   { to: '/expenses', title: 'Expenses', desc: 'Costs + categories' },
   { to: '/reports', title: 'Reports', desc: 'Sales, profit, utang' },
+  { to: '/users', title: 'Users', desc: 'Staff roles and access' },
   { to: '/settings', title: 'Settings', desc: 'Store profile + tax' },
   { to: '/billing', title: 'Billing', desc: 'Plans, usage, upgrades' },
 ];

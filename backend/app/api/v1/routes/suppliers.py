@@ -6,13 +6,14 @@ from fastapi import APIRouter, Depends
 from app.api.v1.dependencies import (
     get_current_organization,
     get_current_user,
+    require_feature,
     require_org_role,
 )
 from app.schemas.common import SuccessResponse
 from app.schemas.supplier import SupplierCreate, SupplierRead, SupplierUpdate
 from app.services import supplier_service
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_feature("suppliers"))])
 MGR = ["owner", "manager"]
 
 

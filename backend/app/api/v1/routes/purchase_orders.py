@@ -8,6 +8,7 @@ from app.api.v1.dependencies import (
     get_current_organization,
     get_current_store,
     get_current_user,
+    require_feature,
     require_org_role,
 )
 from app.core.exceptions import ForbiddenError
@@ -15,7 +16,8 @@ from app.schemas.common import SuccessResponse
 from app.schemas.purchase import POCreate, PORead, POReceive
 from app.services import purchase_service
 
-router = APIRouter()
+# No dedicated PO page — purchasing is part of inventory workflows.
+router = APIRouter(dependencies=[Depends(require_feature("inventory"))])
 MGR = ["owner", "manager"]
 RECEIVE_ROLES = ["owner", "manager", "inventory"]
 
